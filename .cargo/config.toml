@@ -1,0 +1,15 @@
+[target.xtensa-esp32s3-none-elf]
+runner = "probe-rs run --chip=esp32s3 --preverify --always-print-stacktrace --no-location --catch-hardfault"
+
+[env]
+DEFMT_LOG="info"
+SSID = "your_wifi_ssid"
+PASSWORD = "your_wifi_password"
+
+[build]
+rustflags = ["-C", "link-arg=-nostartfiles"]
+
+target = "xtensa-esp32s3-none-elf"
+
+[unstable]
+build-std = ["alloc", "core"]
