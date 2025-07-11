@@ -7,8 +7,9 @@
 )]
 #![feature(type_alias_impl_trait)]
 
-use defmt::info;
+use defmt::{info, error};
 use embassy_executor::Spawner;
+use embassy_net::{Config, Runner, Stack, StackResources};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
@@ -16,29 +17,38 @@ use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::RgbColor;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_backtrace as _;
-use esp_hal::dma::{DmaRxBuf, DmaTxBuf};
 use esp_hal::gpio::{Level, Output, OutputConfig};
-use esp_hal::i2c::master::Config;
+use esp_hal::i2c::master::Config as I2cConfig;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::spi::Mode;
 use esp_hal::time::Rate;
 use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{clock::CpuClock, i2c::master::I2c};
-use esp_hal::{dma_buffers, Async};
-use esp_wifi::init;
-use esp_wifi::wifi::event;
+use esp_hal::Async;
+use esp_wifi::{init, EspWifiController};
+use esp_wifi::wifi::{ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState};
 use mipidsi::interface::SpiInterface;
 use project_emerge_firmware::robot;
 use project_emerge_firmware::robot::display_manager::{DisplayManager, ST7789DisplayManager};
 use project_emerge_firmware::robot::event_loop::EventLoop;
 use project_emerge_firmware::robot::events::{DisplayEvents, RobotEvents};
-use static_cell::make_static;
+// use static_cell::make_static;
 
 // #[panic_handler]
 // fn panic(_: &core::panic::PanicInfo) -> ! {
 //     loop {}
 // }
+
+// When you are okay with using a nightly compiler it's better to use https://docs.rs/static_cell/2.1.0/static_cell/macro.make_static.html
+macro_rules! mk_static {
+    ($t:ty,$val:expr) => {{
+        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
+        #[deny(unused_attributes)]
+        let x = STATIC_CELL.uninit().write(($val));
+        x
+    }};
+}
 
 extern crate alloc;
 
@@ -46,9 +56,8 @@ extern crate alloc;
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
-// Commented out for now, will be needed for WiFi functionality
-// const SSID: &str = env!("SSID");
-// const PASSWORD: &str = env!("PASSWORD");
+const SSID: &str = env!("SSID");
+const PASSWORD: &str = env!("PASSWORD");
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) -> ! {
@@ -71,51 +80,41 @@ async fn main(spawner: Spawner) -> ! {
         NoopRawMutex,
         robot::events::RobotEvents<'static>,
         20,
-    > = make_static!(Channel::new());
+    > = mk_static!(
+        Channel<NoopRawMutex, robot::events::RobotEvents<'static>, 20>,
+        Channel::new()
+    );
 
-    let rng = esp_hal::rng::Rng::new(peripherals.RNG);
+    let mut rng = esp_hal::rng::Rng::new(peripherals.RNG);
     let timer1 = TimerGroup::new(peripherals.TIMG0);
-    let wifi_init = &*make_static!(init(timer1.timer0, rng.clone(), peripherals.RADIO_CLK)
-        .expect("Failed to initialize WIFI/BLE controller"));
+    let wifi_init = &*mk_static!(
+        EspWifiController<'static>,
+        init(timer1.timer0, rng.clone(), peripherals.RADIO_CLK)
+        .expect("Failed to initialize WIFI/BLE controller")
+    );
 
-    let (_wifi_controller, _interfaces) = esp_wifi::wifi::new(&wifi_init, peripherals.WIFI)
+    let (wifi_controller, interfaces) = esp_wifi::wifi::new(&wifi_init, peripherals.WIFI)
         .expect("Failed to initialize WIFI controller");
-    // let wifi_interface = interfaces.sta;
+    let wifi_interface = interfaces.sta;
 
-    // let config = Config::dhcpv4(Default::default());
-    // let seed = (rng.random() as u64) << 32 | rng.random() as u64;
-    // let (stack, runner) = embassy_net::new(
-    //     wifi_interface,
-    //     config,
-    //     make_static!(StackResources::<3>::new()),
-    //     seed,
-    // );
+    let config = Config::dhcpv4(Default::default());
+    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
+    let (stack, runner) = embassy_net::new(
+        wifi_interface,
+        config,
+        mk_static!(StackResources::<3>, StackResources::<3>::new()),
+        seed,
+    );
 
     // spawner.spawn(connection(wifi_controller)).ok();
     // spawner.spawn(net_task(runner)).ok();
 
-    // //wait until wifi connected
-    // loop {
-    //     info!("Waiting for wifi connection...");
-    //     if stack.is_link_up() {
-    //         break;
-    //     }
-    //     Timer::after(Duration::from_millis(500)).await;
-    // }
-
-    // info!("Waiting to get IP address...");
-    // loop {
-    //     if let Some(config) = stack.config_v4() {
-    //         info!("Got IP: {}", config.address); //dhcp IP address
-    //         break;
-    //     }
-    //     Timer::after(Duration::from_millis(500)).await;
-    // }
+    // wait_for_connection(stack).await;
 
     let sda = peripherals.GPIO39;
     let scl = peripherals.GPIO38;
 
-    let i2c = I2c::new(peripherals.I2C0, Config::default())
+    let i2c = I2c::new(peripherals.I2C0, I2cConfig::default())
         .unwrap()
         .with_sda(sda)
         .with_scl(scl)
@@ -140,8 +139,8 @@ async fn main(spawner: Spawner) -> ! {
 
     let si = ExclusiveDevice::new(spi, cs, embassy_time::Delay).unwrap();
 
-    let buffer: &'static mut [u8; 512] = make_static!([0_u8; 512]);
-    let interface = SpiInterface::new(si, dc, buffer);
+    let mut buffer = [0_u8; 512];
+    let interface = SpiInterface::new(si, dc, &mut buffer);
     let mut display = ST7789DisplayManager::new(&mut embassy_time::Delay, interface, res).unwrap();
 
     display.clear_display(Rgb565::BLACK).unwrap();
@@ -161,47 +160,66 @@ async fn main(spawner: Spawner) -> ! {
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0-beta.1/examples/src/bin
 }
 
-// // maintains wifi connection, when it disconnects it tries to reconnect
-// #[embassy_executor::task]
-// async fn connection(mut controller: WifiController<'static>) {
-//     info!("start connection task");
-//     info!("Device capabilities: {:?}", controller.capabilities());
-//     loop {
-//         match esp_wifi::wifi::wifi_state() {
-//             WifiState::StaConnected => {
-//                 // wait until we're no longer connected
-//                 controller.wait_for_event(WifiEvent::StaDisconnected).await;
-//                 Timer::after(Duration::from_millis(5000)).await
-//             }
-//             _ => {}
-//         }
-//         if !matches!(controller.is_started(), Ok(true)) {
-//             let client_config = Configuration::Client(ClientConfiguration {
-//                 ssid: SSID.try_into().unwrap(),
-//                 password: PASSWORD.try_into().unwrap(),
-//                 ..Default::default()
-//             });
-//             controller.set_configuration(&client_config).unwrap();
-//             info!("Starting wifi");
-//             controller.start_async().await.unwrap();
-//             info!("Wifi started!");
-//         }
-//         info!("About to connect...");
+async fn wait_for_connection(stack: Stack<'_>) {
+    info!("Waiting for link to be up");
+    loop {
+        if stack.is_link_up() {
+            break;
+        }
+        Timer::after(Duration::from_millis(500)).await;
+    }
 
-//         match controller.connect_async().await {
-//             Ok(_) => info!("Wifi connected!"),
-//             Err(e) => {
-//                 error!("Failed to connect to wifi: {}", e);
-//                 Timer::after(Duration::from_millis(5000)).await
-//             }
-//         }
-//     }
-// }
+    info!("Waiting to get IP address...");
+    loop {
+        if let Some(config) = stack.config_v4() {
+            info!("Got IP: {}", config.address);
+            break;
+        }
+        Timer::after(Duration::from_millis(500)).await;
+    }
+}
 
-// #[embassy_executor::task]
-// async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
-//     runner.run().await
-// }
+// maintains wifi connection, when it disconnects it tries to reconnect
+#[embassy_executor::task]
+async fn connection(mut controller: WifiController<'static>) {
+    info!("start connection task");
+    info!("Device capabilities: {:?}", controller.capabilities());
+    loop {
+        match esp_wifi::wifi::wifi_state() {
+            WifiState::StaConnected => {
+                // wait until we're no longer connected
+                controller.wait_for_event(WifiEvent::StaDisconnected).await;
+                Timer::after(Duration::from_millis(5000)).await
+            }
+            _ => {}
+        }
+        if !matches!(controller.is_started(), Ok(true)) {
+            let client_config = Configuration::Client(ClientConfiguration {
+                ssid: SSID.try_into().unwrap(),
+                password: PASSWORD.try_into().unwrap(),
+                ..Default::default()
+            });
+            controller.set_configuration(&client_config).unwrap();
+            info!("Starting wifi");
+            controller.start_async().await.unwrap();
+            info!("Wifi started!");
+        }
+        info!("About to connect...");
+
+        match controller.connect_async().await {
+            Ok(_) => info!("Wifi connected!"),
+            Err(e) => {
+                error!("Failed to connect to wifi: {}", e);
+                Timer::after(Duration::from_millis(5000)).await
+            }
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
+    runner.run().await
+}
 
 #[embassy_executor::task]
 async fn monitor_battery_loop(
