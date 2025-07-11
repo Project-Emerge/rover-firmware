@@ -28,6 +28,7 @@ embassy-net = { version = "0.7.0", features = [
   "medium-ethernet",
   "tcp",
   "udp",
+  "dns"
 ] }
 embassy-sync = { version = "0.7.0", features = [] }
 embedded-graphics-core = { version = "0.4.0", features = [
