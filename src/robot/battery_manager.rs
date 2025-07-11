@@ -14,22 +14,11 @@ pub async fn monitor_battery_loop(
     i2c: I2c<'static, Async>,
     command_sender: &Channel<NoopRawMutex, RobotEvents<'static>, 20>,
 ) -> Result<(), ()> {
-    // Initialize I2C
-    // let sda = peripherals.GPIO39;
-    // let scl = peripherals.GPIO38;
-
-    // let i2c = I2c::new(peripherals.I2C0, Config::default())
-    //     .unwrap()
-    //     .with_sda(sda)
-    //     .with_scl(scl)
-    //     .into_async();
-
     // Create INA219 instance
     info!("INA219 initialized successfully");
     let calibration = IntCalibration::new(MicroAmpere(1_000_000), 1_000).unwrap();
     let mut ina =
         SyncIna219::new_calibrated(i2c, Address::from_byte(0x40).unwrap(), calibration).unwrap();
-    
 
     loop {
         let conversion_time = ina.configuration().unwrap().conversion_time_us().unwrap();
