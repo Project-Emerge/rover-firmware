@@ -7,8 +7,10 @@
 )]
 #![feature(type_alias_impl_trait)]
 
-use defmt::{info, error};
+use alloc::string::ToString;
+use defmt::{error, info};
 use embassy_executor::Spawner;
+use embassy_net::tcp::{client, TcpSocket};
 use embassy_net::{Config, Runner, Stack, StackResources};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
@@ -24,15 +26,23 @@ use esp_hal::spi::Mode;
 use esp_hal::time::Rate;
 use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::{clock::CpuClock, i2c::master::I2c};
 use esp_hal::Async;
+use esp_hal::{clock::CpuClock, i2c::master::I2c};
+use esp_wifi::wifi::{
+    ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState,
+};
 use esp_wifi::{init, EspWifiController};
-use esp_wifi::wifi::{ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState};
 use mipidsi::interface::SpiInterface;
 use project_emerge_firmware::robot;
 use project_emerge_firmware::robot::display_manager::{DisplayManager, ST7789DisplayManager};
 use project_emerge_firmware::robot::event_loop::EventLoop;
 use project_emerge_firmware::robot::events::{DisplayEvents, RobotEvents};
+use rust_mqtt::client::client::MqttClient;
+use rust_mqtt::client::client_config::ClientConfig;
+use rust_mqtt::packet::v5::publish_packet::QualityOfService;
+use rust_mqtt::packet::v5::reason_codes::ReasonCode;
+use rust_mqtt::utils::rng_generator::CountingRng;
+use smoltcp::wire::DnsQueryType;
 // use static_cell::make_static;
 
 // #[panic_handler]
@@ -76,12 +86,8 @@ async fn main(spawner: Spawner) -> ! {
     info!("Embassy initialized!");
 
     // Create the command channel for inter-task communication
-    let command_channel: &'static mut Channel<
-        NoopRawMutex,
-        robot::events::RobotEvents<'static>,
-        20,
-    > = mk_static!(
-        Channel<NoopRawMutex, robot::events::RobotEvents<'static>, 20>,
+    let command_channel: &'static mut Channel<NoopRawMutex, robot::events::RobotEvents, 20> = mk_static!(
+        Channel<NoopRawMutex, robot::events::RobotEvents, 20>,
         Channel::new()
     );
 
@@ -90,7 +96,7 @@ async fn main(spawner: Spawner) -> ! {
     let wifi_init = &*mk_static!(
         EspWifiController<'static>,
         init(timer1.timer0, rng.clone(), peripherals.RADIO_CLK)
-        .expect("Failed to initialize WIFI/BLE controller")
+            .expect("Failed to initialize WIFI/BLE controller")
     );
 
     let (wifi_controller, interfaces) = esp_wifi::wifi::new(&wifi_init, peripherals.WIFI)
@@ -106,10 +112,19 @@ async fn main(spawner: Spawner) -> ! {
         seed,
     );
 
-    // spawner.spawn(connection(wifi_controller)).ok();
-    // spawner.spawn(net_task(runner)).ok();
+    spawner.spawn(connection(wifi_controller)).ok();
+    spawner.spawn(net_task(runner)).ok();
 
-    // wait_for_connection(stack).await;
+    wait_for_connection(stack, command_channel).await;
+
+    Timer::after(Duration::from_secs(1)).await;
+
+    let rx_buffer = mk_static!([u8; 4096], [0u8; 4096]);
+    let tx_buffer = mk_static!([u8; 4096], [0u8; 4096]);
+
+    spawner
+        .spawn(mqtt_manager(stack, command_channel, rx_buffer, tx_buffer))
+        .ok();
 
     let sda = peripherals.GPIO39;
     let scl = peripherals.GPIO38;
@@ -160,7 +175,10 @@ async fn main(spawner: Spawner) -> ! {
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0-beta.1/examples/src/bin
 }
 
-async fn wait_for_connection(stack: Stack<'_>) {
+async fn wait_for_connection(
+    stack: Stack<'_>,
+    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 20>,
+) {
     info!("Waiting for link to be up");
     loop {
         if stack.is_link_up() {
@@ -173,9 +191,91 @@ async fn wait_for_connection(stack: Stack<'_>) {
     loop {
         if let Some(config) = stack.config_v4() {
             info!("Got IP: {}", config.address);
+            let ip = heapless::String::try_from(config.address.to_string().as_str()).unwrap();
+            command_sender
+                .send(RobotEvents::Display(DisplayEvents::ShowIp { ip }))
+                .await;
             break;
         }
         Timer::after(Duration::from_millis(500)).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn mqtt_manager(
+    stack: Stack<'static>,
+    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 20>,
+    rx_buffer: &'static mut [u8],
+    tx_buffer: &'static mut [u8],
+) {
+    loop {
+        info!("Connecting to MQTT broker...");
+
+        let mut socket = TcpSocket::new(stack, rx_buffer, tx_buffer);
+        socket.set_timeout(None);
+
+        let address = stack
+            .dns_query("broker.emqx.io", DnsQueryType::A)
+            .await
+            .map(|a| a[0])
+            .unwrap();
+
+        let remote_endpoint = (address, 1883);
+        info!("Connecting to MQTT broker at {}", remote_endpoint);
+        let _ = match socket.connect(remote_endpoint).await {
+            Ok(()) => info!("Connected to MQTT broker at {}", remote_endpoint),
+            Err(e) => {
+                error!("Failed to connect to MQTT broker: {}", e);
+                Timer::after(Duration::from_secs(1)).await;
+                continue; // Retry connection
+            }
+        };
+
+        let mut config = ClientConfig::new(
+            rust_mqtt::client::client_config::MqttVersion::MQTTv5,
+            CountingRng(20000),
+        );
+        config.add_max_subscribe_qos(QualityOfService::QoS1);
+        config.add_client_id("clientId-8rhWgBODCl");
+        config.max_packet_size = 100;
+        let mut recv_buffer = [0; 80];
+        let mut write_buffer = [0; 80];
+        let mut client =
+            MqttClient::<_, 5, _>::new(socket, &mut write_buffer, 80, &mut recv_buffer, 80, config);
+
+        match client.connect_to_broker().await {
+            Ok(()) => {
+                command_sender
+                    .send(RobotEvents::ConnectedToMqtt(true))
+                    .await;
+                info!("Successfully connected to MQTT broker!");
+            }
+            Err(mqtt_error) => {
+                match mqtt_error {
+                    ReasonCode::NetworkError => error!("MQTT Network Error"),
+                    _ => error!("Other MQTT Error: "),
+                }
+                command_sender
+                    .send(RobotEvents::ConnectedToMqtt(false))
+                    .await;
+                Timer::after(Duration::from_secs(1)).await;
+                continue; // Retry connection
+            }
+        }
+
+        // Subscribe to a topic
+        client.subscribe_to_topic("my/topic").await.unwrap();
+
+        loop {
+            let (topic, payload) = match client.receive_message().await {
+                Ok(msg) => (msg.0, msg.1),
+                Err(_) => {
+                    error!("MQTT error on message receive");
+                    continue;
+                },
+            };
+            info!("Received message on topic {}: {:?}", topic, payload);
+        }
     }
 }
 
@@ -183,7 +283,7 @@ async fn wait_for_connection(stack: Stack<'_>) {
 #[embassy_executor::task]
 async fn connection(mut controller: WifiController<'static>) {
     info!("start connection task");
-    info!("Device capabilities: {:?}", controller.capabilities());
+    // info!("Device capabilities: {:?}", controller.capabilities().unwrap());
     loop {
         match esp_wifi::wifi::wifi_state() {
             WifiState::StaConnected => {
@@ -224,7 +324,7 @@ async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
 #[embassy_executor::task]
 async fn monitor_battery_loop(
     i2c: I2c<'static, Async>,
-    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents<'static>, 20>,
+    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 20>,
 ) -> ! {
     info!("Starting battery monitoring loop");
     robot::battery_manager::monitor_battery_loop(i2c, command_sender)
@@ -235,7 +335,7 @@ async fn monitor_battery_loop(
 
 #[embassy_executor::task]
 async fn display_task(
-    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents<'static>, 20>,
+    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 20>,
 ) {
     loop {
         command_sender

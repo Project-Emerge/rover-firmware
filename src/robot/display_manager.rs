@@ -1,9 +1,20 @@
-use embassy_time::Delay;
-use embedded_graphics::{mono_font::{iso_8859_10::FONT_10X20, MonoTextStyle}, pixelcolor::Rgb565, prelude::{Point, RgbColor}, text::Text, prelude::*};
-use embedded_hal::digital::OutputPin;
-use mipidsi::{interface::{Interface, InterfacePixelFormat}, models::ST7789, options::{ColorInversion, Orientation, Rotation}, Builder, Display};
-use heapless::String;
 use core::fmt::Write;
+use embassy_time::Delay;
+use embedded_graphics::{
+    mono_font::{iso_8859_10::FONT_10X20, MonoTextStyle},
+    pixelcolor::Rgb565,
+    prelude::{Point, RgbColor, *},
+    primitives::{Circle, PrimitiveStyle},
+    text::Text,
+};
+use embedded_hal::digital::OutputPin;
+use heapless::String;
+use mipidsi::{
+    interface::{Interface, InterfacePixelFormat},
+    models::ST7789,
+    options::{ColorInversion, Orientation, Rotation},
+    Builder, Display,
+};
 
 #[derive(Debug, Clone)]
 pub enum DisplayError {
@@ -21,7 +32,8 @@ pub trait DisplayManager {
     fn write_current_value(&mut self, value: i64) -> DisplayResult<()>;
     fn write_battery_voltage(&mut self, voltage: f32) -> DisplayResult<()>;
     fn write_battery_percentage(&mut self, percentage: u8) -> DisplayResult<()>;
-    fn show_wifi_status(&mut self, ip: &str) -> DisplayResult<()>;
+    fn show_wifi_status(&mut self, ip: heapless::String<64>) -> DisplayResult<()>;
+    fn write_mqtt_status(&mut self, connected: bool) -> DisplayResult<()>;
     fn show(&mut self) -> DisplayResult<()>;
 }
 
@@ -38,6 +50,7 @@ where
     battery_voltage: f32,
     battery_percentage: u8,
     wifi_ip: String<64>,
+    mqtt_connected: bool,
 }
 
 impl<'a, DI, Rst> ST7789DisplayManager<'a, DI, Rst>
@@ -62,6 +75,7 @@ where
             battery_voltage: 0.0,
             battery_percentage: u8::MIN,
             wifi_ip: String::try_from("Not connected").unwrap(),
+            mqtt_connected: false,
         })
     }
 
@@ -117,7 +131,7 @@ where
         }
     }
 
-    fn show_wifi_status(&mut self, ip: &str) -> DisplayResult<()> {
+    fn show_wifi_status(&mut self, ip: heapless::String<64>) -> DisplayResult<()> {
         if ip.is_empty() {
             Err(DisplayError::UpdateError(
                 heapless::String::try_from("Invalid WiFi status").unwrap(),
@@ -143,13 +157,31 @@ where
             .map_err(|_| DisplayError::TextRenderError)?;
 
         Text::new(&current_string, Point::new(10, 20), self.text_style)
-            .draw(&mut self.display).unwrap();
+            .draw(&mut self.display)
+            .unwrap();
         Text::new(&voltage_text, Point::new(10, 40), self.text_style)
-            .draw(&mut self.display).unwrap();
+            .draw(&mut self.display)
+            .unwrap();
         Text::new(&battery_text, Point::new(10, 60), self.text_style)
-            .draw(&mut self.display).unwrap();
+            .draw(&mut self.display)
+            .unwrap();
         Text::new(&wifi_string, Point::new(10, 80), self.text_style)
-            .draw(&mut self.display).unwrap();
+            .draw(&mut self.display)
+            .unwrap();
+
+        Circle::new(Point::new(210, 10), 20)
+            .into_styled(if self.mqtt_connected {
+                PrimitiveStyle::with_fill(Rgb565::GREEN)
+            } else {
+                PrimitiveStyle::with_fill(Rgb565::RED)
+            })
+            .draw(&mut self.display)
+            .unwrap();
+        Ok(())
+    }
+
+    fn write_mqtt_status(&mut self, connected: bool) -> DisplayResult<()> {
+        self.mqtt_connected = connected;
         Ok(())
     }
 }

@@ -12,7 +12,7 @@ use crate::robot::events::RobotEvents;
 
 pub async fn monitor_battery_loop(
     i2c: I2c<'static, Async>,
-    command_sender: &Channel<NoopRawMutex, RobotEvents<'static>, 20>,
+    command_sender: &Channel<NoopRawMutex, RobotEvents, 20>,
 ) -> Result<(), ()> {
     // Create INA219 instance
     info!("INA219 initialized successfully");

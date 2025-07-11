@@ -1,18 +1,20 @@
 #[derive(Debug, Clone, defmt::Format)]
-pub enum RobotEvents<'a> {
+pub enum RobotEvents {
     // Display events
-    Display(DisplayEvents<'a>),
+    Display(DisplayEvents),
 
     // Motor Commands
     Motor(MotorCommand),
 
     OverCurrent,
+
+    ConnectedToMqtt(bool),
 }
 
 #[derive(Debug, Clone, defmt::Format)]
-pub enum DisplayEvents<'a> {
+pub enum DisplayEvents {
     ShowCurrent { current: i64 },
-    ShowIp { ip: &'a str },
+    ShowIp { ip: heapless::String<64> },
     ShowBatteryPercentage { percentage: u8 },
     ShowBatteryVoltage { voltage: f32 },
     ShowIsLeader { is_leader: bool },

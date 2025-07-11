@@ -7,13 +7,13 @@ use embassy_sync::{blocking_mutex::raw::NoopRawMutex, channel::Channel};
 use embedded_graphics::{pixelcolor::Rgb565, prelude::RgbColor};
 
 pub struct EventLoop<'a, DM: DisplayManager> {
-    command_receiver: &'a Channel<NoopRawMutex, RobotEvents<'a>, 20>,
+    command_receiver: &'a Channel<NoopRawMutex, RobotEvents, 20>,
     display_manager: DM,
 }
 
 impl<'a, DM: DisplayManager> EventLoop<'a, DM> {
     pub fn new(
-        command_receiver: &'a Channel<NoopRawMutex, RobotEvents<'a>, 20>,
+        command_receiver: &'a Channel<NoopRawMutex, RobotEvents, 20>,
         display_manager: DM,
     ) -> Self {
         Self {
@@ -44,15 +44,16 @@ impl<'a, DM: DisplayManager> EventLoop<'a, DM> {
                         }
                         DisplayEvents::ShowIsLeader { is_leader } => todo!(),
                         DisplayEvents::Render => {
-                            self.display_manager
-                                .clear_display(Rgb565::BLACK)
-                                .unwrap();
+                            self.display_manager.clear_display(Rgb565::BLACK).unwrap();
                             self.display_manager.show().unwrap();
                         }
                     }
                 }
                 RobotEvents::Motor(motor_command) => todo!(),
                 RobotEvents::OverCurrent => todo!(),
+                RobotEvents::ConnectedToMqtt(is_connected) => {
+                    self.display_manager.write_mqtt_status(is_connected).unwrap();
+                }
             }
         }
     }
