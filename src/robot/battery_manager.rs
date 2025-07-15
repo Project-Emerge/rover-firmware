@@ -72,6 +72,6 @@ pub async fn monitor_battery_loop(
             )).await;
         }).await;
 
-        Timer::after(Duration::from_secs(1)).await;
+        Timer::after(Duration::from_secs(5)).await;
     }
 }

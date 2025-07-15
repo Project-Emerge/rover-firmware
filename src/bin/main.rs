@@ -10,6 +10,8 @@
 use alloc::string::ToString;
 use defmt::{error, info};
 use embassy_executor::Spawner;
+use embassy_futures::select::{Either};
+use embassy_futures::select::select;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{Config, Runner, Stack, StackResources};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
@@ -220,7 +222,7 @@ async fn mqtt_manager(
         socket.set_timeout(None);
 
         let address = stack
-            .dns_query("broker.emqx.io", DnsQueryType::A)
+            .dns_query("test.mosquitto.org", DnsQueryType::A)
             .await
             .map(|a| a[0])
             .unwrap();
@@ -240,7 +242,7 @@ async fn mqtt_manager(
             rust_mqtt::client::client_config::MqttVersion::MQTTv5,
             CountingRng(20000),
         );
-        config.add_max_subscribe_qos(QualityOfService::QoS1);
+        config.add_max_subscribe_qos(QualityOfService::QoS0);
         config.add_client_id("clientId-8rhWgBODCl");
         config.max_packet_size = 100;
         let mut recv_buffer = [0; 80];
@@ -279,14 +281,16 @@ async fn mqtt_manager(
         }
 
         loop {
-            let (topic, payload) = match client.receive_message().await {
-                Ok(msg) => (msg.0, msg.1),
-                Err(_) => {
-                    error!("MQTT error on message receive");
-                    continue;
-                },
-            };
-            info!("Received message on topic {}: {:?}", topic, payload);
+            match select(client.receive_message(), Timer::after(Duration::from_secs(2))).await {
+                Either::First(msg) =>  {
+                    let (topic, message) = msg.unwrap();
+                    info!("topic: {}, message: {}", topic, message);
+                }
+                Either::Second(_timeout) => {
+                    info!("Sending ping to MQTT broker");
+                    client.send_ping().await.unwrap();
+                }
+            }
         }
     }
 }
