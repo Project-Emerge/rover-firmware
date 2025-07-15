@@ -10,7 +10,7 @@
 use alloc::string::ToString;
 use defmt::{error, info};
 use embassy_executor::Spawner;
-use embassy_net::tcp::{client, TcpSocket};
+use embassy_net::tcp::TcpSocket;
 use embassy_net::{Config, Runner, Stack, StackResources};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
@@ -86,8 +86,8 @@ async fn main(spawner: Spawner) -> ! {
     info!("Embassy initialized!");
 
     // Create the command channel for inter-task communication
-    let command_channel: &'static mut Channel<NoopRawMutex, robot::events::RobotEvents, 20> = mk_static!(
-        Channel<NoopRawMutex, robot::events::RobotEvents, 20>,
+    let command_channel: &'static mut Channel<NoopRawMutex, robot::events::RobotEvents, 64> = mk_static!(
+        Channel<NoopRawMutex, robot::events::RobotEvents, 64>,
         Channel::new()
     );
 
@@ -160,13 +160,18 @@ async fn main(spawner: Spawner) -> ! {
 
     display.clear_display(Rgb565::BLACK).unwrap();
 
-    let mut event_loop = EventLoop::new(command_channel, display);
+    let signal = mk_static!(
+        embassy_sync::signal::Signal<NoopRawMutex, ()>,
+        embassy_sync::signal::Signal::new()
+    );
+    let mut event_loop = EventLoop::new(command_channel, display, signal, spawner);
 
     // Event loop creation and spawning
     spawner
         .spawn(monitor_battery_loop(i2c, command_channel))
         .ok();
     spawner.spawn(display_task(command_channel)).ok();
+    spawner.spawn(system_health_monitor(command_channel)).ok();
 
     event_loop.run().await;
 
@@ -177,7 +182,7 @@ async fn main(spawner: Spawner) -> ! {
 
 async fn wait_for_connection(
     stack: Stack<'_>,
-    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 20>,
+    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 64>,
 ) {
     info!("Waiting for link to be up");
     loop {
@@ -204,7 +209,7 @@ async fn wait_for_connection(
 #[embassy_executor::task]
 async fn mqtt_manager(
     stack: Stack<'static>,
-    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 20>,
+    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 64>,
     rx_buffer: &'static mut [u8],
     tx_buffer: &'static mut [u8],
 ) {
@@ -264,7 +269,14 @@ async fn mqtt_manager(
         }
 
         // Subscribe to a topic
-        client.subscribe_to_topic("my/topic").await.unwrap();
+        if let Err(_) = client.subscribe_to_topic("my/topic").await {
+            error!("Failed to subscribe to MQTT topic");
+            command_sender
+                .send(RobotEvents::ConnectedToMqtt(false))
+                .await;
+            Timer::after(Duration::from_secs(5)).await;
+            continue; // Restart the connection loop
+        }
 
         loop {
             let (topic, payload) = match client.receive_message().await {
@@ -306,10 +318,14 @@ async fn connection(mut controller: WifiController<'static>) {
         }
         info!("About to connect...");
 
-        match controller.connect_async().await {
-            Ok(_) => info!("Wifi connected!"),
-            Err(e) => {
+        match embassy_time::with_timeout(Duration::from_secs(30), controller.connect_async()).await {
+            Ok(Ok(_)) => info!("Wifi connected!"),
+            Ok(Err(e)) => {
                 error!("Failed to connect to wifi: {}", e);
+                Timer::after(Duration::from_millis(5000)).await
+            },
+            Err(_) => {
+                error!("Wifi connection timeout");
                 Timer::after(Duration::from_millis(5000)).await
             }
         }
@@ -324,7 +340,7 @@ async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
 #[embassy_executor::task]
 async fn monitor_battery_loop(
     i2c: I2c<'static, Async>,
-    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 20>,
+    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 64>,
 ) -> ! {
     info!("Starting battery monitoring loop");
     robot::battery_manager::monitor_battery_loop(i2c, command_sender)
@@ -335,12 +351,42 @@ async fn monitor_battery_loop(
 
 #[embassy_executor::task]
 async fn display_task(
-    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 20>,
+    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 64>,
 ) {
     loop {
         command_sender
             .send(RobotEvents::Display(DisplayEvents::Render))
             .await;
         Timer::after(Duration::from_secs(2)).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn system_health_monitor(
+    _command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 64>,
+) {
+    let mut last_heap_info_time = embassy_time::Instant::now();
+    
+    loop {
+        // Log system health information every 30 seconds
+        if embassy_time::Instant::now().duration_since(last_heap_info_time) >= Duration::from_secs(30) {
+            let free_heap = esp_alloc::HEAP.free();
+            let used_heap = esp_alloc::HEAP.used();
+            let total_heap = free_heap + used_heap;
+            
+            info!(
+                "Heap status - Free: {} bytes, Used: {} bytes, Total: {} bytes",
+                free_heap, used_heap, total_heap
+            );
+            
+            // Check if we're getting low on memory
+            if free_heap < 8192 { // Less than 8KB free
+                error!("Low memory warning: only {} bytes free", free_heap);
+            }
+            
+            last_heap_info_time = embassy_time::Instant::now();
+        }
+        
+        Timer::after(Duration::from_secs(10)).await;
     }
 }

@@ -1363,6 +1363,7 @@ dependencies = [
  "critical-section",
  "defmt 1.0.1",
  "embassy-executor",
+ "embassy-futures",
  "embassy-net",
  "embassy-sync 0.7.0",
  "embassy-time",

@@ -30,6 +30,7 @@ embassy-net = { version = "0.7.0", features = [
   "udp",
   "dns"
 ] }
+embassy-futures = "0.1.1"
 embassy-sync = { version = "0.7.0", features = [] }
 embedded-graphics-core = { version = "0.4.0", features = [
   "defmt",
