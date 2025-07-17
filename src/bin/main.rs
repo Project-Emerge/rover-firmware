@@ -8,14 +8,16 @@
 #![feature(type_alias_impl_trait)]
 
 use alloc::string::ToString;
+use project_emerge_firmware::utils::mqtt_manager;
+use smoltcp::wire::DnsQueryType;
+use core::fmt::Write;
 use defmt::{error, info};
 use embassy_executor::Spawner;
-use embassy_futures::select::{Either};
-use embassy_futures::select::select;
-use embassy_net::tcp::TcpSocket;
+use embassy_net::IpAddress;
 use embassy_net::{Config, Runner, Stack, StackResources};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
+use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::{Duration, Timer};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::RgbColor;
@@ -34,17 +36,22 @@ use esp_wifi::wifi::{
     ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState,
 };
 use esp_wifi::{init, EspWifiController};
+use heapless::String;
 use mipidsi::interface::SpiInterface;
 use project_emerge_firmware::robot;
 use project_emerge_firmware::robot::display_manager::{DisplayManager, ST7789DisplayManager};
 use project_emerge_firmware::robot::event_loop::EventLoop;
-use project_emerge_firmware::robot::events::{DisplayEvents, RobotEvents};
-use rust_mqtt::client::client::MqttClient;
-use rust_mqtt::client::client_config::ClientConfig;
-use rust_mqtt::packet::v5::publish_packet::QualityOfService;
-use rust_mqtt::packet::v5::reason_codes::ReasonCode;
-use rust_mqtt::utils::rng_generator::CountingRng;
-use smoltcp::wire::DnsQueryType;
+use project_emerge_firmware::robot::events::{
+    DisplayEvents, EmergeMqttAction, EmergeMqttEvent, RobotEvents,
+};
+// use rust_mqtt::client::client::MqttClient;
+// use rust_mqtt::client::client_config::ClientConfig;
+// use rust_mqtt::packet::v5::publish_packet::QualityOfService;
+// use rust_mqtt::packet::v5::reason_codes::ReasonCode;
+// use rust_mqtt::utils::rng_generator::CountingRng;
+use static_cell::StaticCell;
+
+use project_emerge_firmware::utils::channels::{ActionChannel, EventChannel};
 // use static_cell::make_static;
 
 // #[panic_handler]
@@ -70,6 +77,13 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 const SSID: &str = env!("SSID");
 const PASSWORD: &str = env!("PASSWORD");
+const MQTT_BROKER: &str = env!("MQTT_BROKER");
+const MQTT_PORT: &str = env!("MQTT_PORT");
+
+static UID: StaticCell<String<64>> = StaticCell::new();
+
+static EVENT_CHANNEL: StaticCell<EventChannel> = StaticCell::new();
+static ACTION_CHANNEL: StaticCell<ActionChannel> = StaticCell::new();
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) -> ! {
@@ -119,14 +133,42 @@ async fn main(spawner: Spawner) -> ! {
 
     wait_for_connection(stack, command_channel).await;
 
-    Timer::after(Duration::from_secs(1)).await;
+    // Timer::after(Duration::from_secs(1)).await;
 
-    let rx_buffer = mk_static!([u8; 4096], [0u8; 4096]);
-    let tx_buffer = mk_static!([u8; 4096], [0u8; 4096]);
+    // let rx_buffer = mk_static!([u8; 4096], [0u8; 4096]);
+    // let tx_buffer = mk_static!([u8; 4096], [0u8; 4096]);
 
-    spawner
-        .spawn(mqtt_manager(stack, command_channel, rx_buffer, tx_buffer))
-        .ok();
+    let event_channel =
+        EVENT_CHANNEL.init(PubSubChannel::<NoopRawMutex, EmergeMqttEvent, 16, 4, 2>::new());
+    let event_pub_mqtt = event_channel.publisher().unwrap();
+    // let event_sub_ui = event_channel.subscriber().unwrap();
+
+    let action_channel =
+        ACTION_CHANNEL.init(PubSubChannel::<NoopRawMutex, EmergeMqttAction, 16, 4, 4>::new());
+    // let action_pub_ui = action_channel.publisher().unwrap();
+    let action_sub = action_channel.subscriber().unwrap();
+
+    let uid_handle = UID.init(String::new());
+    core::write!(uid_handle, "project-emerge-{}", "12345").unwrap();
+
+    let IpAddress::Ipv4(address) = stack
+        .dns_query(MQTT_BROKER, DnsQueryType::A)
+        .await
+        .map(|a| a[0])
+        .unwrap();
+
+    mqtt_manager::init(
+        &spawner,
+        stack,
+        uid_handle,
+        event_pub_mqtt,
+        action_sub,
+        address,
+        MQTT_PORT.parse::<u16>().unwrap(),
+        command_channel
+    ).await;
+
+    info!("MQTT manager initialized");
 
     let sda = peripherals.GPIO39;
     let scl = peripherals.GPIO38;
@@ -208,93 +250,6 @@ async fn wait_for_connection(
     }
 }
 
-#[embassy_executor::task]
-async fn mqtt_manager(
-    stack: Stack<'static>,
-    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 64>,
-    rx_buffer: &'static mut [u8],
-    tx_buffer: &'static mut [u8],
-) {
-    loop {
-        info!("Connecting to MQTT broker...");
-
-        let mut socket = TcpSocket::new(stack, rx_buffer, tx_buffer);
-        socket.set_timeout(None);
-
-        let address = stack
-            .dns_query("test.mosquitto.org", DnsQueryType::A)
-            .await
-            .map(|a| a[0])
-            .unwrap();
-
-        let remote_endpoint = (address, 1883);
-        info!("Connecting to MQTT broker at {}", remote_endpoint);
-        let _ = match socket.connect(remote_endpoint).await {
-            Ok(()) => info!("Connected to MQTT broker at {}", remote_endpoint),
-            Err(e) => {
-                error!("Failed to connect to MQTT broker: {}", e);
-                Timer::after(Duration::from_secs(1)).await;
-                continue; // Retry connection
-            }
-        };
-
-        let mut config = ClientConfig::new(
-            rust_mqtt::client::client_config::MqttVersion::MQTTv5,
-            CountingRng(20000),
-        );
-        config.add_max_subscribe_qos(QualityOfService::QoS0);
-        config.add_client_id("clientId-8rhWgBODCl");
-        config.max_packet_size = 100;
-        let mut recv_buffer = [0; 80];
-        let mut write_buffer = [0; 80];
-        let mut client =
-            MqttClient::<_, 5, _>::new(socket, &mut write_buffer, 80, &mut recv_buffer, 80, config);
-
-        match client.connect_to_broker().await {
-            Ok(()) => {
-                command_sender
-                    .send(RobotEvents::ConnectedToMqtt(true))
-                    .await;
-                info!("Successfully connected to MQTT broker!");
-            }
-            Err(mqtt_error) => {
-                match mqtt_error {
-                    ReasonCode::NetworkError => error!("MQTT Network Error"),
-                    _ => error!("Other MQTT Error: "),
-                }
-                command_sender
-                    .send(RobotEvents::ConnectedToMqtt(false))
-                    .await;
-                Timer::after(Duration::from_secs(1)).await;
-                continue; // Retry connection
-            }
-        }
-
-        // Subscribe to a topic
-        if let Err(_) = client.subscribe_to_topic("my/topic").await {
-            error!("Failed to subscribe to MQTT topic");
-            command_sender
-                .send(RobotEvents::ConnectedToMqtt(false))
-                .await;
-            Timer::after(Duration::from_secs(5)).await;
-            continue; // Restart the connection loop
-        }
-
-        loop {
-            match select(client.receive_message(), Timer::after(Duration::from_secs(2))).await {
-                Either::First(msg) =>  {
-                    let (topic, message) = msg.unwrap();
-                    info!("topic: {}, message: {}", topic, message);
-                }
-                Either::Second(_timeout) => {
-                    info!("Sending ping to MQTT broker");
-                    client.send_ping().await.unwrap();
-                }
-            }
-        }
-    }
-}
-
 // maintains wifi connection, when it disconnects it tries to reconnect
 #[embassy_executor::task]
 async fn connection(mut controller: WifiController<'static>) {
@@ -322,12 +277,13 @@ async fn connection(mut controller: WifiController<'static>) {
         }
         info!("About to connect...");
 
-        match embassy_time::with_timeout(Duration::from_secs(30), controller.connect_async()).await {
+        match embassy_time::with_timeout(Duration::from_secs(30), controller.connect_async()).await
+        {
             Ok(Ok(_)) => info!("Wifi connected!"),
             Ok(Err(e)) => {
                 error!("Failed to connect to wifi: {}", e);
                 Timer::after(Duration::from_millis(5000)).await
-            },
+            }
             Err(_) => {
                 error!("Wifi connection timeout");
                 Timer::after(Duration::from_millis(5000)).await
@@ -367,30 +323,40 @@ async fn display_task(
 
 #[embassy_executor::task]
 async fn system_health_monitor(
-    _command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 64>,
+    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 64>,
 ) {
     let mut last_heap_info_time = embassy_time::Instant::now();
-    
+
     loop {
         // Log system health information every 30 seconds
-        if embassy_time::Instant::now().duration_since(last_heap_info_time) >= Duration::from_secs(30) {
+        if embassy_time::Instant::now().duration_since(last_heap_info_time)
+            >= Duration::from_secs(30)
+        {
             let free_heap = esp_alloc::HEAP.free();
             let used_heap = esp_alloc::HEAP.used();
             let total_heap = free_heap + used_heap;
-            
+
             info!(
                 "Heap status - Free: {} bytes, Used: {} bytes, Total: {} bytes",
                 free_heap, used_heap, total_heap
             );
-            
+
+            command_sender
+                .send(RobotEvents::Display(DisplayEvents::ShowMemoryStats {
+                    free_memory: free_heap as f32 / 1024.0,
+                    total_memory: total_heap as f32 / 1024.0,
+                }))
+                .await;
+
             // Check if we're getting low on memory
-            if free_heap < 8192 { // Less than 8KB free
+            if free_heap < 8192 {
+                // Less than 8KB free
                 error!("Low memory warning: only {} bytes free", free_heap);
             }
-            
+
             last_heap_info_time = embassy_time::Instant::now();
         }
-        
+
         Timer::after(Duration::from_secs(10)).await;
     }
 }

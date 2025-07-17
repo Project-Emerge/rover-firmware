@@ -34,6 +34,7 @@ pub trait DisplayManager {
     fn write_battery_percentage(&mut self, percentage: u8) -> DisplayResult<()>;
     fn show_wifi_status(&mut self, ip: heapless::String<64>) -> DisplayResult<()>;
     fn write_mqtt_status(&mut self, connected: bool) -> DisplayResult<()>;
+    fn write_memory_stats(&mut self, free_memory: f32, total_memory: f32) -> DisplayResult<()>;
     fn show(&mut self) -> DisplayResult<()>;
 }
 
@@ -51,6 +52,8 @@ where
     battery_percentage: u8,
     wifi_ip: String<64>,
     mqtt_connected: bool,
+    free_memory: f32,
+    total_memory: f32,
 }
 
 impl<'a, DI, Rst> ST7789DisplayManager<'a, DI, Rst>
@@ -76,6 +79,8 @@ where
             battery_percentage: u8::MIN,
             wifi_ip: String::try_from("Not connected").unwrap(),
             mqtt_connected: false,
+            free_memory: 0.0,
+            total_memory: 0.0,
         })
     }
 
@@ -155,6 +160,9 @@ where
         let mut wifi_string = heapless::String::<64>::new();
         write!(&mut wifi_string, "WiFi: {}", self.wifi_ip)
             .map_err(|_| DisplayError::TextRenderError)?;
+        let mut memory_text = heapless::String::<64>::new();
+        write!(&mut memory_text, "Mem: {:.1} kB / {:.1} kB", self.free_memory, self.total_memory)
+            .map_err(|_| DisplayError::TextRenderError)?;
 
         Text::new(&current_string, Point::new(10, 20), self.text_style)
             .draw(&mut self.display)
@@ -166,6 +174,9 @@ where
             .draw(&mut self.display)
             .unwrap();
         Text::new(&wifi_string, Point::new(10, 80), self.text_style)
+            .draw(&mut self.display)
+            .unwrap();
+        Text::new(&memory_text, Point::new(10, 100), self.text_style)
             .draw(&mut self.display)
             .unwrap();
 
@@ -182,6 +193,12 @@ where
 
     fn write_mqtt_status(&mut self, connected: bool) -> DisplayResult<()> {
         self.mqtt_connected = connected;
+        Ok(())
+    }
+    
+    fn write_memory_stats(&mut self, free_memory: f32, total_memory: f32) -> DisplayResult<()> {
+        self.free_memory = free_memory;
+        self.total_memory = total_memory;
         Ok(())
     }
 }
