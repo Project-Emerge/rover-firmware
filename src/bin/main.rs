@@ -111,7 +111,7 @@ async fn main(spawner: Spawner) -> ! {
     let timer1 = TimerGroup::new(peripherals.TIMG0);
     let wifi_init = &*mk_static!(
         EspWifiController<'static>,
-        init(timer1.timer0, rng.clone(), peripherals.RADIO_CLK)
+        init(timer1.timer0, rng.clone())
             .expect("Failed to initialize WIFI/BLE controller")
     );
 
@@ -132,11 +132,6 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(net_task(runner)).ok();
 
     wait_for_connection(stack, command_channel).await;
-
-    // Timer::after(Duration::from_secs(1)).await;
-
-    // let rx_buffer = mk_static!([u8; 4096], [0u8; 4096]);
-    // let tx_buffer = mk_static!([u8; 4096], [0u8; 4096]);
 
     let event_channel =
         EVENT_CHANNEL.init(PubSubChannel::<NoopRawMutex, EmergeMqttEvent, 16, 4, 2>::new());
