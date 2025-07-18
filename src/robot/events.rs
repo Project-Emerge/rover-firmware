@@ -1,5 +1,5 @@
-use defmt::{info, error};
-use mountain_mqtt::{client::{Client, ClientError, EventHandlerError}, error, mqtt_manager::{ConnectionId, MqttOperations}, packets::publish::ApplicationMessage};
+use defmt::info;
+use mountain_mqtt::{client::{Client, ClientError, EventHandlerError}, mqtt_manager::{ConnectionId, MqttOperations}, packets::publish::ApplicationMessage};
 use mountain_mqtt_embassy::mqtt_manager::FromApplicationMessage;
 
 #[derive(Debug, Clone, defmt::Format)]
@@ -28,16 +28,14 @@ pub enum DisplayEvents {
 
 #[derive(Debug, Clone, defmt::Format)]
 pub enum RobotRotation {
-    Clockwise,
-    CounterClockwise,
+    Clockwise(f32),
+    CounterClockwise(f32),
 }
 
 #[derive(Debug, Clone, defmt::Format)]
 pub enum MotorCommand {
-    MovementVector { x: i64, y: i64 },
+    Move { x: f32, y: f32 },
     Rotate { direction: RobotRotation }, // Speed in percentage
-    SetMotorSpeed { speed: u8 },
-    SetMovementTime { time: f32 }, // Time in seconds
     StopMotors,
 }
 
@@ -52,7 +50,7 @@ impl<const P: usize> FromApplicationMessage<P> for EmergeMqttEvent {
     ) -> Result<Self, EventHandlerError> {
         let received = match message.topic_name {
             "my/topic" => {
-                // info!("Received message on my/topic: {}", message.payload);
+                info!("Received message on my/topic: {}", message.payload);
                 Ok(EmergeMqttEvent::Test)
             },
             _ => {
@@ -73,7 +71,7 @@ pub enum EmergeMqttAction {
 impl MqttOperations for EmergeMqttAction {
     async fn perform<'a, 'b, C>(
         &'b mut self,
-        client: &mut C,
+        _client: &mut C,
         _client_id: &'a str,
         _connection_id: ConnectionId,
         _is_retry: bool,

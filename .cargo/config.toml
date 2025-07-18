@@ -5,7 +5,7 @@ runner = "probe-rs run --chip=esp32s3 --preverify --always-print-stacktrace --no
 DEFMT_LOG="info"
 SSID = "your_wifi_ssid"
 PASSWORD = "your_wifi_password"
-MQTT_BROKER = "test.mosquitto.org"
+MQTT_BROKER = "10.0.1.0"
 MQTT_PORT = "1883"
 
 [build]

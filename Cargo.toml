@@ -85,12 +85,16 @@ mountain-mqtt = { version = "0.2.0", default-features = false, features = [
 mountain-mqtt-embassy = "0.2.0"
 serde = { version = "1.0.209", default-features = false, features = ["derive"] }
 serde-json-core = "0.6.0"
+tb6612fng = "1.0.0"
 
 
 [profile.dev]
 # Rust debug is too slow.
 # For debug builds always builds with some optimization
 opt-level = "s"
+
+[profile.release.package.esp-wifi]
+opt-level = 3
 
 [profile.release]
 codegen-units    = 1     # LLVM can perform better optimizations using a single thread

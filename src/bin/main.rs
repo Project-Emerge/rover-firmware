@@ -8,8 +8,6 @@
 #![feature(type_alias_impl_trait)]
 
 use alloc::string::ToString;
-use project_emerge_firmware::utils::mqtt_manager;
-use smoltcp::wire::DnsQueryType;
 use core::fmt::Write;
 use defmt::{error, info};
 use embassy_executor::Spawner;
@@ -25,6 +23,8 @@ use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_backtrace as _;
 use esp_hal::gpio::{Level, Output, OutputConfig};
 use esp_hal::i2c::master::Config as I2cConfig;
+use esp_hal::mcpwm::operator::PwmPinConfig;
+use esp_hal::mcpwm::{McPwm, PeripheralClockConfig};
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::spi::Mode;
 use esp_hal::time::Rate;
@@ -44,11 +44,9 @@ use project_emerge_firmware::robot::event_loop::EventLoop;
 use project_emerge_firmware::robot::events::{
     DisplayEvents, EmergeMqttAction, EmergeMqttEvent, RobotEvents,
 };
-// use rust_mqtt::client::client::MqttClient;
-// use rust_mqtt::client::client_config::ClientConfig;
-// use rust_mqtt::packet::v5::publish_packet::QualityOfService;
-// use rust_mqtt::packet::v5::reason_codes::ReasonCode;
-// use rust_mqtt::utils::rng_generator::CountingRng;
+use project_emerge_firmware::robot::motors_manager::Tb6612fngMotorsManager;
+use project_emerge_firmware::utils::mqtt_manager;
+use smoltcp::wire::DnsQueryType;
 use static_cell::StaticCell;
 
 use project_emerge_firmware::utils::channels::{ActionChannel, EventChannel};
@@ -101,6 +99,11 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
+    let clock_cfg = PeripheralClockConfig::with_frequency(Rate::from_mhz(32)).unwrap();
+    let mut mcpwm = McPwm::new(peripherals.MCPWM0, clock_cfg);
+    mcpwm.operator0.set_timer(&mcpwm.timer0);
+    mcpwm.operator1.set_timer(&mcpwm.timer1);
+
     // Create the command channel for inter-task communication
     let command_channel: &'static mut Channel<NoopRawMutex, robot::events::RobotEvents, 64> = mk_static!(
         Channel<NoopRawMutex, robot::events::RobotEvents, 64>,
@@ -111,8 +114,7 @@ async fn main(spawner: Spawner) -> ! {
     let timer1 = TimerGroup::new(peripherals.TIMG0);
     let wifi_init = &*mk_static!(
         EspWifiController<'static>,
-        init(timer1.timer0, rng.clone())
-            .expect("Failed to initialize WIFI/BLE controller")
+        init(timer1.timer0, rng.clone()).expect("Failed to initialize WIFI/BLE controller")
     );
 
     let (wifi_controller, interfaces) = esp_wifi::wifi::new(&wifi_init, peripherals.WIFI)
@@ -146,11 +148,14 @@ async fn main(spawner: Spawner) -> ! {
     let uid_handle = UID.init(String::new());
     core::write!(uid_handle, "project-emerge-{}", "12345").unwrap();
 
-    let IpAddress::Ipv4(address) = stack
-        .dns_query(MQTT_BROKER, DnsQueryType::A)
-        .await
-        .map(|a| a[0])
-        .unwrap();
+    let IpAddress::Ipv4(address) = match MQTT_BROKER.parse::<IpAddress>() {
+        Ok(addr) => addr,
+        Err(_) => stack
+            .dns_query(MQTT_BROKER, DnsQueryType::A)
+            .await
+            .map(|a| a[0])
+            .expect("Failed to resolve MQTT broker address"),
+    };
 
     mqtt_manager::init(
         &spawner,
@@ -160,8 +165,9 @@ async fn main(spawner: Spawner) -> ! {
         action_sub,
         address,
         MQTT_PORT.parse::<u16>().unwrap(),
-        command_channel
-    ).await;
+        command_channel,
+    )
+    .await;
 
     info!("MQTT manager initialized");
 
@@ -199,11 +205,42 @@ async fn main(spawner: Spawner) -> ! {
 
     display.clear_display(Rgb565::BLACK).unwrap();
 
+    let ain1_1 = Output::new(peripherals.GPIO15, Level::Low, OutputConfig::default());
+    let ain1_2 = Output::new(peripherals.GPIO21, Level::Low, OutputConfig::default());
+    let operator0 = mcpwm.operator0;
+    let (pwma_1, pwmb_1) = operator0.with_pins(
+        peripherals.GPIO17,
+        PwmPinConfig::UP_ACTIVE_HIGH,
+        peripherals.GPIO8,
+        PwmPinConfig::UP_ACTIVE_HIGH,
+    );
+    let stbya = Output::new(peripherals.GPIO12, Level::Low, OutputConfig::default());
+    let bin1_1 = Output::new(peripherals.GPIO7, Level::Low, OutputConfig::default());
+    let bin1_2 = Output::new(peripherals.GPIO47, Level::Low, OutputConfig::default());
+    let ain2_1 = Output::new(peripherals.GPIO16, Level::Low, OutputConfig::default());
+    let ain2_2 = Output::new(peripherals.GPIO14, Level::Low, OutputConfig::default());
+    let operator1 = mcpwm.operator1;
+    let (pwma_2, pwmb_2) = operator1.with_pins(
+        peripherals.GPIO13,
+        PwmPinConfig::UP_ACTIVE_HIGH,
+        peripherals.GPIO45,
+        PwmPinConfig::UP_ACTIVE_HIGH,
+    );
+    let bin2_1 = Output::new(peripherals.GPIO6, Level::Low, OutputConfig::default());
+    let bin2_2 = Output::new(peripherals.GPIO48, Level::Low, OutputConfig::default());
+    let stbyb = Output::new(peripherals.GPIO4, Level::Low, OutputConfig::default());
+
+    let motor_driver = Tb6612fngMotorsManager::new(
+        ain1_1, ain1_2, pwma_1, bin1_1, bin1_2, pwmb_1, stbya, ain2_1, ain2_2, pwma_2, bin2_1,
+        bin2_2, pwmb_2, stbyb,
+    )
+    .unwrap();
+
     let signal = mk_static!(
         embassy_sync::signal::Signal<NoopRawMutex, ()>,
         embassy_sync::signal::Signal::new()
     );
-    let mut event_loop = EventLoop::new(command_channel, display, signal, spawner);
+    let mut event_loop = EventLoop::new(command_channel, display, motor_driver, signal, spawner);
 
     // Event loop creation and spawning
     spawner

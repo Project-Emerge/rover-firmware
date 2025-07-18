@@ -4,3 +4,4 @@ pub mod display_manager;
 pub mod events;
 pub mod event_loop;
 pub mod battery_manager;
+pub mod motors_manager;

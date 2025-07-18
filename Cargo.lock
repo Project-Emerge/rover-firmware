@@ -1416,6 +1416,7 @@ dependencies = [
  "serde-json-core",
  "smoltcp",
  "static_cell",
+ "tb6612fng",
 ]
 
 [[package]]
@@ -1656,6 +1657,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tb6612fng"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "deb607c40f035bac4c873219b98acf5d272466b56e5d68f309322bf8f280b0bd"
+dependencies = [
+ "embedded-hal 1.0.0",
 ]
 
 [[package]]
