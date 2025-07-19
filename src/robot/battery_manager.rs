@@ -1,4 +1,3 @@
-use embassy_sync::{blocking_mutex::raw::NoopRawMutex, channel::Channel};
 use embassy_time::{Duration, Timer};
 use esp_hal::{i2c::master::I2c, Async};
 use defmt::{info, error};
@@ -8,11 +7,13 @@ use ina219::{
     SyncIna219,
 };
 
-use crate::robot::events::RobotEvents;
+use crate::{robot::events::RobotEvents, utils::{channels::{ActionPub, EventPub}, protocol::Battery}};
+use crate::utils::mqtt_manager::EmergeMqttAction;
 
 pub async fn monitor_battery_loop(
     i2c: I2c<'static, Async>,
-    command_sender: &Channel<NoopRawMutex, RobotEvents, 64>,
+    command_sender: EventPub,
+    action_pub: ActionPub
 ) -> Result<(), ()> {
     // Create INA219 instance
     info!("INA219 initialized successfully");
@@ -64,13 +65,23 @@ pub async fn monitor_battery_loop(
 
         // Send events with timeout to prevent blocking
         let _ = embassy_time::with_timeout(Duration::from_millis(500), async {
-            command_sender.send(RobotEvents::Display(
+            command_sender.publish(RobotEvents::Display(
                 crate::robot::events::DisplayEvents::ShowCurrent { current: absorbed_current },
             )).await;
-            command_sender.send(RobotEvents::Display(
+            command_sender.publish(RobotEvents::Display(
                 crate::robot::events::DisplayEvents::ShowBatteryVoltage { voltage: battery_voltage },
             )).await;
         }).await;
+
+        action_pub
+            .publish(EmergeMqttAction::BatteryStatus(
+                Battery {
+                    absorbed_current,
+                    battery_voltage: battery_voltage,
+                    battery_percentage: 0, // Placeholder, update as needed
+                },
+            ))
+            .await;
 
         Timer::after(Duration::from_secs(5)).await;
     }

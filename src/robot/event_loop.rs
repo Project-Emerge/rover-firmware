@@ -1,47 +1,50 @@
-use crate::robot::{
+use crate::{robot::{
     display_manager::DisplayManager,
     events::{DisplayEvents, MotorCommand, RobotEvents, RobotRotation},
     motors_manager::MotorsManager,
-};
+}, utils::channels::{ActionPub, EventSub}};
 use defmt::{debug, info};
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
-use embassy_sync::{blocking_mutex::raw::NoopRawMutex, channel::Channel, signal::Signal};
+use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
 use embassy_time::Duration;
 use embedded_graphics::{pixelcolor::Rgb565, prelude::RgbColor};
 
 pub struct EventLoop<DM: DisplayManager, MM: MotorsManager> {
-    command_receiver: &'static Channel<NoopRawMutex, RobotEvents, 64>,
     display_manager: DM,
     motors_manager: MM,
     spawner: Spawner,
     last_signal: &'static Signal<NoopRawMutex, ()>,
+    event_sub: EventSub,
+    action_pub: ActionPub,
 }
 
 impl<DM: DisplayManager, MM: MotorsManager> EventLoop<DM, MM> {
     pub fn new(
-        command_receiver: &'static Channel<NoopRawMutex, RobotEvents, 64>,
         display_manager: DM,
         motors_manager: MM,
         signal: &'static Signal<NoopRawMutex, ()>,
+        event_sub: EventSub,
+        action_pub: ActionPub,
         spawner: Spawner,
     ) -> Self {
         Self {
-            command_receiver,
             display_manager,
             motors_manager,
             spawner,
             last_signal: signal,
+            event_sub,
+            action_pub,
         }
     }
 
     pub async fn run(&mut self) {
         self.spawner
-            .spawn(motor_timeout_task(self.command_receiver, self.last_signal))
+            .spawn(motor_timeout_task(self.last_signal))
             .unwrap();
         info!("Event loop started");
         loop {
-            match self.command_receiver.receive().await {
+            match self.event_sub.next_message_pure().await {
                 RobotEvents::Display(DisplayEvents::ShowBatteryPercentage { percentage }) => {
                     self.display_manager
                         .write_battery_percentage(percentage)
@@ -68,7 +71,7 @@ impl<DM: DisplayManager, MM: MotorsManager> EventLoop<DM, MM> {
                     .display_manager
                     .write_memory_stats(free_memory, total_memory)
                     .unwrap(),
-                RobotEvents::Motor(MotorCommand::Move { x, y }) => {
+                RobotEvents::Motor(MotorCommand::Move { left: x, right: y }) => {
                     self.last_signal.signal(());
                     self.motors_manager.drive(x, y).unwrap();
                 }
@@ -97,16 +100,12 @@ impl<DM: DisplayManager, MM: MotorsManager> EventLoop<DM, MM> {
 
 #[embassy_executor::task]
 async fn motor_timeout_task(
-    event_channel: &'static Channel<NoopRawMutex, RobotEvents, 64>,
     signal: &'static Signal<NoopRawMutex, ()>,
 ) {
     loop {
         let res = select(
             async move {
                 embassy_time::Timer::after(Duration::from_secs(5)).await;
-                event_channel
-                    .send(RobotEvents::Motor(MotorCommand::StopMotors))
-                    .await;
             },
             signal.wait(),
         )

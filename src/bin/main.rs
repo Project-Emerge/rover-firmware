@@ -14,7 +14,6 @@ use embassy_executor::Spawner;
 use embassy_net::IpAddress;
 use embassy_net::{Config, Runner, Stack, StackResources};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::channel::Channel;
 use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::{Duration, Timer};
 use embedded_graphics::pixelcolor::Rgb565;
@@ -33,7 +32,7 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_hal::Async;
 use esp_hal::{clock::CpuClock, i2c::master::I2c};
 use esp_wifi::wifi::{
-    ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState,
+    ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState
 };
 use esp_wifi::{init, EspWifiController};
 use heapless::String;
@@ -42,14 +41,14 @@ use project_emerge_firmware::robot;
 use project_emerge_firmware::robot::display_manager::{DisplayManager, ST7789DisplayManager};
 use project_emerge_firmware::robot::event_loop::EventLoop;
 use project_emerge_firmware::robot::events::{
-    DisplayEvents, EmergeMqttAction, EmergeMqttEvent, RobotEvents,
+    DisplayEvents, RobotEvents,
 };
 use project_emerge_firmware::robot::motors_manager::Tb6612fngMotorsManager;
-use project_emerge_firmware::utils::mqtt_manager;
+use project_emerge_firmware::utils::mqtt_manager::{self, EmergeMqttAction};
 use smoltcp::wire::DnsQueryType;
 use static_cell::StaticCell;
 
-use project_emerge_firmware::utils::channels::{ActionChannel, EventChannel};
+use project_emerge_firmware::utils::channels::{ActionChannel, ActionPub, EventChannel, EventPub};
 // use static_cell::make_static;
 
 // #[panic_handler]
@@ -105,10 +104,10 @@ async fn main(spawner: Spawner) -> ! {
     mcpwm.operator1.set_timer(&mcpwm.timer1);
 
     // Create the command channel for inter-task communication
-    let command_channel: &'static mut Channel<NoopRawMutex, robot::events::RobotEvents, 64> = mk_static!(
-        Channel<NoopRawMutex, robot::events::RobotEvents, 64>,
-        Channel::new()
-    );
+    // let command_channel: &'static mut Channel<NoopRawMutex, robot::events::RobotEvents, 64> = mk_static!(
+    //     Channel<NoopRawMutex, robot::events::RobotEvents, 64>,
+    //     Channel::new()
+    // );
 
     let mut rng = esp_hal::rng::Rng::new(peripherals.RNG);
     let timer1 = TimerGroup::new(peripherals.TIMG0);
@@ -133,17 +132,20 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(connection(wifi_controller)).ok();
     spawner.spawn(net_task(runner)).ok();
 
-    wait_for_connection(stack, command_channel).await;
-
+    
     let event_channel =
-        EVENT_CHANNEL.init(PubSubChannel::<NoopRawMutex, EmergeMqttEvent, 16, 4, 2>::new());
-    let event_pub_mqtt = event_channel.publisher().unwrap();
-    // let event_sub_ui = event_channel.subscriber().unwrap();
-
+    EVENT_CHANNEL.init(PubSubChannel::<NoopRawMutex, RobotEvents, 16, 4, 4>::new());
+    let event_sub = event_channel.subscriber().unwrap();
+    // let event_pub = event_channel.publisher().unwrap();
+    
     let action_channel =
-        ACTION_CHANNEL.init(PubSubChannel::<NoopRawMutex, EmergeMqttAction, 16, 4, 4>::new());
-    // let action_pub_ui = action_channel.publisher().unwrap();
+    ACTION_CHANNEL.init(PubSubChannel::<NoopRawMutex, EmergeMqttAction, 16, 4, 4>::new());
+    let action_pub = action_channel.publisher().unwrap();
     let action_sub = action_channel.subscriber().unwrap();
+
+    // Create a publisher for wait_for_connection
+    let event_pub_for_wait = event_channel.publisher().unwrap();
+    wait_for_connection(stack, event_pub_for_wait).await;
 
     let uid_handle = UID.init(String::new());
     core::write!(uid_handle, "project-emerge-{}", "12345").unwrap();
@@ -157,15 +159,16 @@ async fn main(spawner: Spawner) -> ! {
             .expect("Failed to resolve MQTT broker address"),
     };
 
+    // Create a publisher for mqtt_manager::init
+    let event_pub_for_mqtt = event_channel.publisher().unwrap();
     mqtt_manager::init(
         &spawner,
         stack,
         uid_handle,
-        event_pub_mqtt,
+        event_pub_for_mqtt,
         action_sub,
         address,
         MQTT_PORT.parse::<u16>().unwrap(),
-        command_channel,
     )
     .await;
 
@@ -240,14 +243,14 @@ async fn main(spawner: Spawner) -> ! {
         embassy_sync::signal::Signal<NoopRawMutex, ()>,
         embassy_sync::signal::Signal::new()
     );
-    let mut event_loop = EventLoop::new(command_channel, display, motor_driver, signal, spawner);
+    let mut event_loop = EventLoop::new(display, motor_driver, signal, event_sub, action_pub, spawner);
 
     // Event loop creation and spawning
     spawner
-        .spawn(monitor_battery_loop(i2c, command_channel))
+        .spawn(monitor_battery_loop(i2c, event_channel.publisher().unwrap(), action_channel.publisher().unwrap()))
         .ok();
-    spawner.spawn(display_task(command_channel)).ok();
-    spawner.spawn(system_health_monitor(command_channel)).ok();
+    spawner.spawn(display_task(event_channel.publisher().unwrap())).ok();
+    spawner.spawn(system_health_monitor(event_channel.publisher().unwrap())).ok();
 
     event_loop.run().await;
 
@@ -258,7 +261,7 @@ async fn main(spawner: Spawner) -> ! {
 
 async fn wait_for_connection(
     stack: Stack<'_>,
-    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 64>,
+    command_sender: EventPub,
 ) {
     info!("Waiting for link to be up");
     loop {
@@ -273,9 +276,9 @@ async fn wait_for_connection(
         if let Some(config) = stack.config_v4() {
             info!("Got IP: {}", config.address);
             let ip = heapless::String::try_from(config.address.to_string().as_str()).unwrap();
-            command_sender
-                .send(RobotEvents::Display(DisplayEvents::ShowIp { ip }))
-                .await;
+            command_sender.publish(RobotEvents::Display(
+                DisplayEvents::ShowIp { ip },
+            )).await;
             break;
         }
         Timer::after(Duration::from_millis(500)).await;
@@ -332,10 +335,11 @@ async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
 #[embassy_executor::task]
 async fn monitor_battery_loop(
     i2c: I2c<'static, Async>,
-    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 64>,
+    event_pub: EventPub,
+    action_pub: ActionPub,
 ) -> ! {
     info!("Starting battery monitoring loop");
-    robot::battery_manager::monitor_battery_loop(i2c, command_sender)
+    robot::battery_manager::monitor_battery_loop(i2c, event_pub, action_pub)
         .await
         .unwrap();
     core::panic!("monitor_battery_loop returned unexpectedly");
@@ -343,11 +347,11 @@ async fn monitor_battery_loop(
 
 #[embassy_executor::task]
 async fn display_task(
-    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 64>,
+    command_sender: EventPub
 ) {
     loop {
         command_sender
-            .send(RobotEvents::Display(DisplayEvents::Render))
+            .publish(RobotEvents::Display(DisplayEvents::Render))
             .await;
         Timer::after(Duration::from_secs(2)).await;
     }
@@ -355,7 +359,7 @@ async fn display_task(
 
 #[embassy_executor::task]
 async fn system_health_monitor(
-    command_sender: &'static Channel<NoopRawMutex, robot::events::RobotEvents, 64>,
+    command_sender: EventPub,
 ) {
     let mut last_heap_info_time = embassy_time::Instant::now();
 
@@ -374,7 +378,7 @@ async fn system_health_monitor(
             );
 
             command_sender
-                .send(RobotEvents::Display(DisplayEvents::ShowMemoryStats {
+                .publish(RobotEvents::Display(DisplayEvents::ShowMemoryStats {
                     free_memory: free_heap as f32 / 1024.0,
                     total_memory: total_heap as f32 / 1024.0,
                 }))
