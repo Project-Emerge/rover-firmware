@@ -1,6 +1,6 @@
 use embassy_time::{Duration, Timer};
 use esp_hal::{i2c::master::I2c, Async};
-use defmt::{info, error};
+use defmt::{error, info, warn};
 use ina219::{
     address::Address,
     calibration::{IntCalibration, MicroAmpere},
@@ -9,6 +9,10 @@ use ina219::{
 
 use crate::{robot::events::RobotEvents, utils::{channels::{ActionPub, EventPub}, protocol::Battery}};
 use crate::utils::mqtt_manager::EmergeMqttAction;
+
+const CELL_COUNT: usize = 2; // Number of cells in the battery pack
+const CELL_MAX_VOLTAGE: f32 = 4.2; // Nominal voltage per cell
+const CELL_MIN_VOLTAGE: f32 = 2.5; // Minimum voltage per cell
 
 pub async fn monitor_battery_loop(
     i2c: I2c<'static, Async>,
@@ -57,6 +61,17 @@ pub async fn monitor_battery_loop(
         let absorbed_current = measurement.current.0 / 100_000;
         let battery_voltage = measurement.bus_voltage.voltage_mv() as f32 / 1000.0;
 
+        let max_voltage = CELL_COUNT as f32 * CELL_MAX_VOLTAGE; // 8.4V for 2 cells
+        let min_voltage = CELL_COUNT as f32 * CELL_MIN_VOLTAGE; // 5.0V for 2 cells
+        let battery_percentage = if battery_voltage >= max_voltage {
+            100
+        } else if battery_voltage <= min_voltage {
+            warn!("Battery voltage too low");
+            0
+        } else {
+            (((battery_voltage - min_voltage) / (max_voltage - min_voltage)) * 100.0) as u8
+        };
+
         info!(
             "Current: {} mA, Battery Voltage: {} V",
             absorbed_current,
@@ -71,6 +86,9 @@ pub async fn monitor_battery_loop(
             command_sender.publish(RobotEvents::Display(
                 crate::robot::events::DisplayEvents::ShowBatteryVoltage { voltage: battery_voltage },
             )).await;
+            command_sender.publish(RobotEvents::Display(
+                crate::robot::events::DisplayEvents::ShowBatteryPercentage { percentage: battery_percentage },
+            )).await;
         }).await;
 
         action_pub
@@ -78,7 +96,7 @@ pub async fn monitor_battery_loop(
                 Battery {
                     absorbed_current,
                     battery_voltage: battery_voltage,
-                    battery_percentage: 0, // Placeholder, update as needed
+                    battery_percentage: battery_percentage, // Placeholder, update as needed
                 },
             ))
             .await;

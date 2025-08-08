@@ -1,0 +1,4 @@
+lint_level = "warn"
+allow = ["clippy::needless_pass_by_value", "clippy::missing_docs_in_private_items"]
+deny = ["clippy::complexity", "clippy::unwrap_used"]
+warn = ["clippy::pedantic", "clippy::default_numeric_fallback"]

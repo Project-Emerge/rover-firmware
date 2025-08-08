@@ -1,11 +1,11 @@
 use core::fmt::Write;
 use embassy_time::Delay;
 use embedded_graphics::{
-    mono_font::{iso_8859_10::FONT_10X20, MonoTextStyle},
+    mono_font::{iso_8859_10::FONT_9X15, iso_8859_2::FONT_10X20, MonoTextStyle},
     pixelcolor::Rgb565,
     prelude::{Point, RgbColor, *},
     primitives::{Circle, PrimitiveStyle},
-    text::Text,
+    text::{Alignment, Text},
 };
 use embedded_hal::digital::OutputPin;
 use heapless::String;
@@ -54,6 +54,7 @@ where
     mqtt_connected: bool,
     free_memory: f32,
     total_memory: f32,
+    device_id: i32,
 }
 
 impl<'a, DI, Rst> ST7789DisplayManager<'a, DI, Rst>
@@ -73,7 +74,7 @@ where
             .map_err(|_| DisplayError::InitializationError)?;
         Ok(ST7789DisplayManager {
             display,
-            text_style: MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE),
+            text_style: MonoTextStyle::new(&FONT_9X15, Rgb565::WHITE),
             current_value: 0,
             battery_voltage: 0.0,
             battery_percentage: u8::MIN,
@@ -81,6 +82,7 @@ where
             mqtt_connected: false,
             free_memory: 0.0,
             total_memory: 0.0,
+            device_id: env!("ROBOT_ID").parse::<i32>().unwrap(), // Make sure ROBOT_ID is set to a valid integer string
         })
     }
 
@@ -163,6 +165,9 @@ where
         let mut memory_text = heapless::String::<64>::new();
         write!(&mut memory_text, "Mem: {:.1} kB / {:.1} kB", self.free_memory, self.total_memory)
             .map_err(|_| DisplayError::TextRenderError)?;
+        let mut robot_id_text = heapless::String::<32>::new();
+        write!(&mut robot_id_text, "ID: {}", self.device_id)
+            .map_err(|_| DisplayError::TextRenderError)?;
 
         Text::new(&current_string, Point::new(10, 20), self.text_style)
             .draw(&mut self.display)
@@ -176,7 +181,11 @@ where
         Text::new(&wifi_string, Point::new(10, 80), self.text_style)
             .draw(&mut self.display)
             .unwrap();
-        Text::new(&memory_text, Point::new(10, 100), self.text_style)
+        // Text::new(&memory_text, Point::new(10, 100), self.text_style)
+        //     .draw(&mut self.display)
+        //     .unwrap();
+        let large_text_style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
+        Text::with_alignment(&robot_id_text, Point::new(120, 125), large_text_style,Alignment::Center)
             .draw(&mut self.display)
             .unwrap();
 

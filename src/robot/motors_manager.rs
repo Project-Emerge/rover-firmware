@@ -1,3 +1,4 @@
+use defmt::info;
 use embedded_hal::{digital::OutputPin, pwm::SetDutyCycle};
 use tb6612fng::{DriveCommand, Motor, Tb6612fng, Tb6612fngError};
 
@@ -207,6 +208,7 @@ where
         // left and right are expected to be in the range [-1.0, 1.0]
         let left_speed: u8 = (left.abs() * 100.0) as u8;
         let right_speed: u8 = (right.abs() * 100.0) as u8;
+        info!("Driving with left: {}, right: {}", left_speed, right_speed);
         
         let left_command = if left >= 0.0 { DriveCommand::Forward(left_speed) } else { DriveCommand::Backward(left_speed) };
         let right_command = if right >= 0.0 { DriveCommand::Forward(right_speed) } else { DriveCommand::Backward(right_speed) };

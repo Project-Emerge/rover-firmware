@@ -72,6 +72,7 @@ impl<DM: DisplayManager, MM: MotorsManager> EventLoop<DM, MM> {
                     .write_memory_stats(free_memory, total_memory)
                     .unwrap(),
                 RobotEvents::Motor(MotorCommand::Move { left: x, right: y }) => {
+                    info!("Moving with left: {}, right: {}", x, y);
                     self.last_signal.signal(());
                     self.motors_manager.drive(x, y).unwrap();
                 }

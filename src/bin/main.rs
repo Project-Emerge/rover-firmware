@@ -23,6 +23,7 @@ use esp_backtrace as _;
 use esp_hal::gpio::{Level, Output, OutputConfig};
 use esp_hal::i2c::master::Config as I2cConfig;
 use esp_hal::mcpwm::operator::PwmPinConfig;
+use esp_hal::mcpwm::timer::PwmWorkingMode;
 use esp_hal::mcpwm::{McPwm, PeripheralClockConfig};
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::spi::Mode;
@@ -32,7 +33,7 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_hal::Async;
 use esp_hal::{clock::CpuClock, i2c::master::I2c};
 use esp_wifi::wifi::{
-    ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState
+    ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState,
 };
 use esp_wifi::{init, EspWifiController};
 use heapless::String;
@@ -40,9 +41,7 @@ use mipidsi::interface::SpiInterface;
 use project_emerge_firmware::robot;
 use project_emerge_firmware::robot::display_manager::{DisplayManager, ST7789DisplayManager};
 use project_emerge_firmware::robot::event_loop::EventLoop;
-use project_emerge_firmware::robot::events::{
-    DisplayEvents, RobotEvents,
-};
+use project_emerge_firmware::robot::events::{DisplayEvents, RobotEvents};
 use project_emerge_firmware::robot::motors_manager::Tb6612fngMotorsManager;
 use project_emerge_firmware::utils::mqtt_manager::{self, EmergeMqttAction};
 use smoltcp::wire::DnsQueryType;
@@ -101,7 +100,7 @@ async fn main(spawner: Spawner) -> ! {
     let clock_cfg = PeripheralClockConfig::with_frequency(Rate::from_mhz(32)).unwrap();
     let mut mcpwm = McPwm::new(peripherals.MCPWM0, clock_cfg);
     mcpwm.operator0.set_timer(&mcpwm.timer0);
-    mcpwm.operator1.set_timer(&mcpwm.timer1);
+    mcpwm.operator1.set_timer(&mcpwm.timer0);
 
     // Create the command channel for inter-task communication
     // let command_channel: &'static mut Channel<NoopRawMutex, robot::events::RobotEvents, 64> = mk_static!(
@@ -132,14 +131,13 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(connection(wifi_controller)).ok();
     spawner.spawn(net_task(runner)).ok();
 
-    
     let event_channel =
-    EVENT_CHANNEL.init(PubSubChannel::<NoopRawMutex, RobotEvents, 16, 4, 4>::new());
+        EVENT_CHANNEL.init(PubSubChannel::<NoopRawMutex, RobotEvents, 16, 4, 4>::new());
     let event_sub = event_channel.subscriber().unwrap();
     // let event_pub = event_channel.publisher().unwrap();
-    
+
     let action_channel =
-    ACTION_CHANNEL.init(PubSubChannel::<NoopRawMutex, EmergeMqttAction, 16, 4, 4>::new());
+        ACTION_CHANNEL.init(PubSubChannel::<NoopRawMutex, EmergeMqttAction, 16, 4, 4>::new());
     let action_pub = action_channel.publisher().unwrap();
     let action_sub = action_channel.subscriber().unwrap();
 
@@ -209,19 +207,23 @@ async fn main(spawner: Spawner) -> ! {
     display.clear_display(Rgb565::BLACK).unwrap();
 
     let ain1_1 = Output::new(peripherals.GPIO15, Level::Low, OutputConfig::default());
-    let ain1_2 = Output::new(peripherals.GPIO21, Level::Low, OutputConfig::default());
+    let ain2_1 = Output::new(peripherals.GPIO16, Level::Low, OutputConfig::default());
+    let bin1_1 = Output::new(peripherals.GPIO7, Level::Low, OutputConfig::default());
+    let bin2_1 = Output::new(peripherals.GPIO6, Level::Low, OutputConfig::default());
+    let stbya = Output::new(peripherals.GPIO12, Level::Low, OutputConfig::default());
     let operator0 = mcpwm.operator0;
     let (pwma_1, pwmb_1) = operator0.with_pins(
         peripherals.GPIO17,
         PwmPinConfig::UP_ACTIVE_HIGH,
-        peripherals.GPIO8,
+        peripherals.GPIO5,
         PwmPinConfig::UP_ACTIVE_HIGH,
     );
-    let stbya = Output::new(peripherals.GPIO12, Level::Low, OutputConfig::default());
-    let bin1_1 = Output::new(peripherals.GPIO7, Level::Low, OutputConfig::default());
-    let bin1_2 = Output::new(peripherals.GPIO47, Level::Low, OutputConfig::default());
-    let ain2_1 = Output::new(peripherals.GPIO16, Level::Low, OutputConfig::default());
+
+    let ain1_2 = Output::new(peripherals.GPIO21, Level::Low, OutputConfig::default());
     let ain2_2 = Output::new(peripherals.GPIO14, Level::Low, OutputConfig::default());
+    let bin1_2 = Output::new(peripherals.GPIO47, Level::Low, OutputConfig::default());
+    let bin2_2 = Output::new(peripherals.GPIO48, Level::Low, OutputConfig::default());
+    let stbyb = Output::new(peripherals.GPIO4, Level::Low, OutputConfig::default());
     let operator1 = mcpwm.operator1;
     let (pwma_2, pwmb_2) = operator1.with_pins(
         peripherals.GPIO13,
@@ -229,12 +231,13 @@ async fn main(spawner: Spawner) -> ! {
         peripherals.GPIO45,
         PwmPinConfig::UP_ACTIVE_HIGH,
     );
-    let bin2_1 = Output::new(peripherals.GPIO6, Level::Low, OutputConfig::default());
-    let bin2_2 = Output::new(peripherals.GPIO48, Level::Low, OutputConfig::default());
-    let stbyb = Output::new(peripherals.GPIO4, Level::Low, OutputConfig::default());
+
+    let timer_clock_cfg =
+        clock_cfg.timer_clock_with_frequency(99, PwmWorkingMode::Increase, Rate::from_khz(20)).unwrap();
+    mcpwm.timer0.start(timer_clock_cfg);
 
     let motor_driver = Tb6612fngMotorsManager::new(
-        ain1_1, ain1_2, pwma_1, bin1_1, bin1_2, pwmb_1, stbya, ain2_1, ain2_2, pwma_2, bin2_1,
+        ain1_1, ain2_1, pwma_1, bin1_1, bin2_1, pwmb_1, stbya, ain1_2, ain2_2, pwma_2, bin1_2,
         bin2_2, pwmb_2, stbyb,
     )
     .unwrap();
@@ -243,14 +246,29 @@ async fn main(spawner: Spawner) -> ! {
         embassy_sync::signal::Signal<NoopRawMutex, ()>,
         embassy_sync::signal::Signal::new()
     );
-    let mut event_loop = EventLoop::new(display, motor_driver, signal, event_sub, action_pub, spawner);
+    let mut event_loop = EventLoop::new(
+        display,
+        motor_driver,
+        signal,
+        event_sub,
+        action_pub,
+        spawner,
+    );
 
     // Event loop creation and spawning
     spawner
-        .spawn(monitor_battery_loop(i2c, event_channel.publisher().unwrap(), action_channel.publisher().unwrap()))
+        .spawn(monitor_battery_loop(
+            i2c,
+            event_channel.publisher().unwrap(),
+            action_channel.publisher().unwrap(),
+        ))
         .ok();
-    spawner.spawn(display_task(event_channel.publisher().unwrap())).ok();
-    spawner.spawn(system_health_monitor(event_channel.publisher().unwrap())).ok();
+    spawner
+        .spawn(display_task(event_channel.publisher().unwrap()))
+        .ok();
+    spawner
+        .spawn(system_health_monitor(event_channel.publisher().unwrap()))
+        .ok();
 
     event_loop.run().await;
 
@@ -259,10 +277,7 @@ async fn main(spawner: Spawner) -> ! {
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0-beta.1/examples/src/bin
 }
 
-async fn wait_for_connection(
-    stack: Stack<'_>,
-    command_sender: EventPub,
-) {
+async fn wait_for_connection(stack: Stack<'_>, command_sender: EventPub) {
     info!("Waiting for link to be up");
     loop {
         if stack.is_link_up() {
@@ -276,9 +291,9 @@ async fn wait_for_connection(
         if let Some(config) = stack.config_v4() {
             info!("Got IP: {}", config.address);
             let ip = heapless::String::try_from(config.address.to_string().as_str()).unwrap();
-            command_sender.publish(RobotEvents::Display(
-                DisplayEvents::ShowIp { ip },
-            )).await;
+            command_sender
+                .publish(RobotEvents::Display(DisplayEvents::ShowIp { ip }))
+                .await;
             break;
         }
         Timer::after(Duration::from_millis(500)).await;
@@ -346,9 +361,7 @@ async fn monitor_battery_loop(
 }
 
 #[embassy_executor::task]
-async fn display_task(
-    command_sender: EventPub
-) {
+async fn display_task(command_sender: EventPub) {
     loop {
         command_sender
             .publish(RobotEvents::Display(DisplayEvents::Render))
@@ -358,9 +371,7 @@ async fn display_task(
 }
 
 #[embassy_executor::task]
-async fn system_health_monitor(
-    command_sender: EventPub,
-) {
+async fn system_health_monitor(command_sender: EventPub) {
     let mut last_heap_info_time = embassy_time::Instant::now();
 
     loop {
