@@ -36,8 +36,6 @@ ESP32-S3 firmware for a robotic platform with MQTT communication, motor control,
 | **ST7789 Display** | SPI pins | CS, DC, RST pins (check your board) |
 | **Motor Drivers** | PWM pins | TB6612FNG control pins |
 
-> **Note**: Pin assignments may vary based on your specific ESP32-S3 board. Check your board's pinout diagram.
-
 ## Setup
 
 ### 1. Install ESP Rust Toolchain
@@ -53,13 +51,20 @@ espup install
 ### 2. Install probe-rs
 
 ```bash
+yay -S probe-rs
+```
+
+Or
+
+```bash
 # Install probe-rs for flashing
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/probe-rs/probe-rs/releases/latest/download/probe-rs-tools-installer.sh | sh
 ```
 
 ### 3. Configure Environment Variables
 
-Create a `.cargo/config.toml` file in the project root with your specific settings:
+The `.cargo/config.toml` file in the project root contains the configuration for the build environment.
+Update it with your specific settings:
 
 ```toml
 [target.xtensa-esp32s3-none-elf]
@@ -90,14 +95,7 @@ export WIFI_PASSWORD="your_wifi_password"
 export MQTT_BROKER="192.168.1.100"
 ```
 
-Then reference them in `.cargo/config.toml`:
-
-```toml
-[env]
-SSID = { value = "${WIFI_SSID}", relative = false }
-PASSWORD = { value = "${WIFI_PASSWORD}", relative = false }
-MQTT_BROKER = { value = "${MQTT_BROKER}", relative = false }
-```
+Then build the project.
 
 ## Building
 
