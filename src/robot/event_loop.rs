@@ -79,14 +79,17 @@ impl<DM: DisplayManager, MM: MotorsManager> EventLoop<DM, MM> {
                     .unwrap(),
                 RobotEvents::Motor(MotorCommand::Move { left: x, right: y }) => {
                     info!("Moving with left: {}, right: {}", x, y);
+                    self.last_signal.signal(());
                     self.motors_manager.drive(x, y).unwrap();
                     self.trigger_motor().await;
                 }
                 RobotEvents::Motor(MotorCommand::Rotate { direction: RobotRotation::Clockwise(speed) }) => {
+                    self.last_signal.signal(());
                     self.motors_manager.rotate_clockwise(speed).unwrap();
                     self.trigger_motor().await;
                 }
                 RobotEvents::Motor(MotorCommand::Rotate { direction: RobotRotation::CounterClockwise(speed) }) => {
+                    self.last_signal.signal(());
                     self.motors_manager.rotate_counter_clockwise(speed).unwrap();
                     self.trigger_motor().await;
                 }
@@ -121,10 +124,11 @@ async fn motor_timeout_task(
         )
         .await;
 
-        publisher.publish(RobotEvents::Motor(MotorCommand::StopMotors)).await;
-
         match res {
-            Either::First(_) => debug!("Motor task completed successfully"),
+            Either::First(_) => {
+                debug!("Motor task timed out");
+                publisher.publish(RobotEvents::Motor(MotorCommand::StopMotors)).await;
+            } 
             Either::Second(_) => debug!("Motor task interrupted by signal"),
         }
     }
