@@ -134,7 +134,10 @@ async fn main(spawner: Spawner) -> ! {
     let event_channel =
         EVENT_CHANNEL.init(PubSubChannel::<NoopRawMutex, RobotEvents, 16, 4, 4>::new());
     let event_sub = event_channel.subscriber().unwrap();
-    // let event_pub = event_channel.publisher().unwrap();
+    let event_pub = mk_static!(
+        embassy_sync::pubsub::Publisher<NoopRawMutex, RobotEvents, 16, 4, 4>,
+        event_channel.publisher().unwrap()
+    );
 
     let action_channel =
         ACTION_CHANNEL.init(PubSubChannel::<NoopRawMutex, EmergeMqttAction, 16, 4, 4>::new());
@@ -252,6 +255,7 @@ async fn main(spawner: Spawner) -> ! {
         signal,
         event_sub,
         action_pub,
+        event_pub,
         spawner,
     );
 

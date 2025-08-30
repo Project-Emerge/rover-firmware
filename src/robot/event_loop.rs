@@ -2,7 +2,7 @@ use crate::{robot::{
     display_manager::DisplayManager,
     events::{DisplayEvents, MotorCommand, RobotEvents, RobotRotation},
     motors_manager::MotorsManager,
-}, utils::channels::{ActionPub, EventSub}};
+}, utils::{channels::{ActionPub, EventPub, EventSub}}};
 use defmt::{debug, info};
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
@@ -17,6 +17,7 @@ pub struct EventLoop<DM: DisplayManager, MM: MotorsManager> {
     last_signal: &'static Signal<NoopRawMutex, ()>,
     event_sub: EventSub,
     action_pub: ActionPub,
+    event_pub: &'static EventPub,
 }
 
 impl<DM: DisplayManager, MM: MotorsManager> EventLoop<DM, MM> {
@@ -26,6 +27,7 @@ impl<DM: DisplayManager, MM: MotorsManager> EventLoop<DM, MM> {
         signal: &'static Signal<NoopRawMutex, ()>,
         event_sub: EventSub,
         action_pub: ActionPub,
+        event_pub: &'static EventPub,
         spawner: Spawner,
     ) -> Self {
         Self {
@@ -35,13 +37,17 @@ impl<DM: DisplayManager, MM: MotorsManager> EventLoop<DM, MM> {
             last_signal: signal,
             event_sub,
             action_pub,
+            event_pub,
         }
     }
 
-    pub async fn run(&mut self) {
+    async fn trigger_motor(&self) {
         self.spawner
-            .spawn(motor_timeout_task(self.last_signal))
+            .spawn(motor_timeout_task(self.last_signal, self.event_pub))
             .unwrap();
+    }
+
+    pub async fn run(&mut self) {
         info!("Event loop started");
         loop {
             match self.event_sub.next_message_pure().await {
@@ -73,22 +79,24 @@ impl<DM: DisplayManager, MM: MotorsManager> EventLoop<DM, MM> {
                     .unwrap(),
                 RobotEvents::Motor(MotorCommand::Move { left: x, right: y }) => {
                     info!("Moving with left: {}, right: {}", x, y);
-                    self.last_signal.signal(());
                     self.motors_manager.drive(x, y).unwrap();
+                    self.trigger_motor().await;
                 }
                 RobotEvents::Motor(MotorCommand::Rotate { direction: RobotRotation::Clockwise(speed) }) => {
-                    self.last_signal.signal(());
                     self.motors_manager.rotate_clockwise(speed).unwrap();
+                    self.trigger_motor().await;
                 }
                 RobotEvents::Motor(MotorCommand::Rotate { direction: RobotRotation::CounterClockwise(speed) }) => {
-                    self.last_signal.signal(());
                     self.motors_manager.rotate_counter_clockwise(speed).unwrap();
+                    self.trigger_motor().await;
                 }
                 RobotEvents::Motor(MotorCommand::StopMotors) => {
-                    self.last_signal.signal(());
                     self.motors_manager.stop().unwrap();
                 }
-                RobotEvents::OverCurrent => todo!(),
+                RobotEvents::OverCurrent => {
+                    self.motors_manager.stop().unwrap();
+                    // TODO: Handle overcurrent event
+                },
                 RobotEvents::ConnectedToMqtt(is_connected) => {
                     self.display_manager
                         .write_mqtt_status(is_connected)
@@ -102,6 +110,7 @@ impl<DM: DisplayManager, MM: MotorsManager> EventLoop<DM, MM> {
 #[embassy_executor::task]
 async fn motor_timeout_task(
     signal: &'static Signal<NoopRawMutex, ()>,
+    publisher: &'static EventPub,
 ) {
     loop {
         let res = select(
@@ -111,6 +120,8 @@ async fn motor_timeout_task(
             signal.wait(),
         )
         .await;
+
+        publisher.publish(RobotEvents::Motor(MotorCommand::StopMotors)).await;
 
         match res {
             Either::First(_) => debug!("Motor task completed successfully"),
