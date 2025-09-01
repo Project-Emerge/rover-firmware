@@ -1,11 +1,7 @@
 use core::fmt::Write;
 use embassy_time::Delay;
 use embedded_graphics::{
-    mono_font::{iso_8859_10::FONT_9X15, iso_8859_2::FONT_10X20, MonoTextStyle},
-    pixelcolor::Rgb565,
-    prelude::{Point, RgbColor, *},
-    primitives::{Circle, PrimitiveStyle},
-    text::{Alignment, Text},
+    image::Image, mono_font::{iso_8859_10::FONT_9X15, iso_8859_2::FONT_10X20, MonoTextStyle}, pixelcolor::Rgb565, prelude::{Point, RgbColor, *}, primitives::{Circle, PrimitiveStyle}, text::{Alignment, Text}
 };
 use embedded_hal::digital::OutputPin;
 use heapless::String;
@@ -35,6 +31,7 @@ pub trait DisplayManager {
     fn show_wifi_status(&mut self, ip: heapless::String<64>) -> DisplayResult<()>;
     fn write_mqtt_status(&mut self, connected: bool) -> DisplayResult<()>;
     fn write_memory_stats(&mut self, free_memory: f32, total_memory: f32) -> DisplayResult<()>;
+    fn show_splash_screen(&mut self, image: &[u8]) -> DisplayResult<()>;
     fn show(&mut self) -> DisplayResult<()>;
 }
 
@@ -208,6 +205,27 @@ where
     fn write_memory_stats(&mut self, free_memory: f32, total_memory: f32) -> DisplayResult<()> {
         self.free_memory = free_memory;
         self.total_memory = total_memory;
+        Ok(())
+    }
+
+    fn show_splash_screen(&mut self, image: &[u8]) -> DisplayResult<()> {
+        let bmp = tinybmp::Bmp::from_slice(image).map_err(|_| DisplayError::UpdateError(
+            heapless::String::try_from("Invalid splash screen image").unwrap(),
+        ))?;
+        Image::new(&bmp, Point::new(0, 0)).draw(&mut self.display).unwrap();
+
+        let mut robot_id_text = heapless::String::<32>::new();
+        write!(&mut robot_id_text, "ID: {}", self.device_id)
+            .map_err(|_| DisplayError::TextRenderError)?;
+        let large_text_style = MonoTextStyle::new(&FONT_10X20, Rgb565::BLACK);
+        Text::with_alignment(&robot_id_text, Point::new(190, 125), large_text_style,Alignment::Center)
+            .draw(&mut self.display)
+            .unwrap();
+        let mut loading_text = heapless::String::<32>::new();
+        write!(&mut loading_text, "Loading...").map_err(|_| DisplayError::TextRenderError)?;
+        Text::with_alignment(&loading_text, Point::new(185, 35), large_text_style,Alignment::Center)
+            .draw(&mut self.display)
+            .unwrap();
         Ok(())
     }
 }

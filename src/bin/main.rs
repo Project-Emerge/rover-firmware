@@ -75,6 +75,7 @@ const SSID: &str = env!("SSID");
 const PASSWORD: &str = env!("PASSWORD");
 const MQTT_BROKER: &str = env!("MQTT_BROKER");
 const MQTT_PORT: &str = env!("MQTT_PORT");
+const BMP_DATA: &[u8] = include_bytes!("../../resources/project-emerge-logo.bmp");
 
 static UID: StaticCell<String<64>> = StaticCell::new();
 
@@ -114,6 +115,32 @@ async fn main(spawner: Spawner) -> ! {
         EspWifiController<'static>,
         init(timer1.timer0, rng.clone()).expect("Failed to initialize WIFI/BLE controller")
     );
+
+        // Initialize the display
+    let sclk = peripherals.GPIO9;
+    let mosi = peripherals.GPIO10;
+    let cs = Output::new(peripherals.GPIO11, Level::Low, OutputConfig::default());
+    let dc = Output::new(peripherals.GPIO46, Level::Low, OutputConfig::default());
+    let res = Output::new(peripherals.GPIO3, Level::Low, OutputConfig::default());
+
+    let spi = Spi::new(
+        peripherals.SPI2,
+        SpiConfig::default()
+            .with_frequency(Rate::from_mhz(60))
+            .with_mode(Mode::_0),
+    )
+    .unwrap()
+    .with_sck(sclk)
+    .with_mosi(mosi);
+
+    let si = ExclusiveDevice::new(spi, cs, embassy_time::Delay).unwrap();
+
+    let mut buffer = [0_u8; 512];
+    let interface = SpiInterface::new(si, dc, &mut buffer);
+    let mut display = ST7789DisplayManager::new(&mut embassy_time::Delay, interface, res).unwrap();
+
+    display.clear_display(Rgb565::WHITE).unwrap();
+    display.show_splash_screen(BMP_DATA).unwrap();
 
     let (wifi_controller, interfaces) = esp_wifi::wifi::new(&wifi_init, peripherals.WIFI)
         .expect("Failed to initialize WIFI controller");
@@ -180,31 +207,6 @@ async fn main(spawner: Spawner) -> ! {
         .with_sda(sda)
         .with_scl(scl)
         .into_async();
-
-    // Initialize the display
-    let sclk = peripherals.GPIO9;
-    let mosi = peripherals.GPIO10;
-    let cs = Output::new(peripherals.GPIO11, Level::Low, OutputConfig::default());
-    let dc = Output::new(peripherals.GPIO46, Level::Low, OutputConfig::default());
-    let res = Output::new(peripherals.GPIO3, Level::Low, OutputConfig::default());
-
-    let spi = Spi::new(
-        peripherals.SPI2,
-        SpiConfig::default()
-            .with_frequency(Rate::from_mhz(60))
-            .with_mode(Mode::_0),
-    )
-    .unwrap()
-    .with_sck(sclk)
-    .with_mosi(mosi);
-
-    let si = ExclusiveDevice::new(spi, cs, embassy_time::Delay).unwrap();
-
-    let mut buffer = [0_u8; 512];
-    let interface = SpiInterface::new(si, dc, &mut buffer);
-    let mut display = ST7789DisplayManager::new(&mut embassy_time::Delay, interface, res).unwrap();
-
-    display.clear_display(Rgb565::BLACK).unwrap();
 
     let ain1_1 = Output::new(peripherals.GPIO15, Level::Low, OutputConfig::default());
     let ain2_1 = Output::new(peripherals.GPIO16, Level::Low, OutputConfig::default());
