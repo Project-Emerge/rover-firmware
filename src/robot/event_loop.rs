@@ -3,20 +3,20 @@ use crate::{robot::{
     events::{DisplayEvents, MotorCommand, RobotEvents, RobotRotation},
     motors_manager::MotorsManager,
 }, utils::channels::{ActionPub, EventSub}};
-use defmt::{debug, info};
+use defmt::info;
 use embassy_executor::Spawner;
-use embassy_futures::select::{select, Either};
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
-use embassy_time::Duration;
+use embassy_time::{Duration, Instant};
 use embedded_graphics::{pixelcolor::Rgb565, prelude::RgbColor};
 
 pub struct EventLoop<DM: DisplayManager, MM: MotorsManager> {
     display_manager: DM,
     motors_manager: MM,
-    spawner: Spawner,
+    _spawner: Spawner,
     last_signal: &'static Signal<NoopRawMutex, ()>,
     event_sub: EventSub,
-    action_pub: ActionPub,
+    _action_pub: ActionPub,
+    last_time: Instant,
 }
 
 impl<DM: DisplayManager, MM: MotorsManager> EventLoop<DM, MM> {
@@ -31,19 +31,26 @@ impl<DM: DisplayManager, MM: MotorsManager> EventLoop<DM, MM> {
         Self {
             display_manager,
             motors_manager,
-            spawner,
+            _spawner: spawner,
             last_signal: signal,
             event_sub,
-            action_pub,
+            _action_pub: action_pub,
+            last_time: Instant::now(),
+        }
+    }
+
+    fn stop_robot_after_timeout(&mut self, timeout_secs: Duration) {
+        let now = Instant::now();
+        if now - self.last_time > timeout_secs {
+            self.motors_manager.stop().unwrap();
+            self.last_time = now;
         }
     }
 
     pub async fn run(&mut self) {
-        self.spawner
-            .spawn(motor_timeout_task(self.last_signal))
-            .unwrap();
         info!("Event loop started");
         loop {
+            self.stop_robot_after_timeout(Duration::from_secs(5));
             match self.event_sub.next_message_pure().await {
                 RobotEvents::Display(DisplayEvents::ShowBatteryPercentage { percentage }) => {
                     self.display_manager
@@ -75,14 +82,17 @@ impl<DM: DisplayManager, MM: MotorsManager> EventLoop<DM, MM> {
                     info!("Moving with left: {}, right: {}", x, y);
                     self.last_signal.signal(());
                     self.motors_manager.drive(x, y).unwrap();
+                    self.last_time = Instant::now();
                 }
                 RobotEvents::Motor(MotorCommand::Rotate { direction: RobotRotation::Clockwise(speed) }) => {
                     self.last_signal.signal(());
                     self.motors_manager.rotate_clockwise(speed).unwrap();
+                    self.last_time = Instant::now();
                 }
                 RobotEvents::Motor(MotorCommand::Rotate { direction: RobotRotation::CounterClockwise(speed) }) => {
                     self.last_signal.signal(());
                     self.motors_manager.rotate_counter_clockwise(speed).unwrap();
+                    self.last_time = Instant::now();
                 }
                 RobotEvents::Motor(MotorCommand::StopMotors) => {
                     self.last_signal.signal(());
@@ -95,26 +105,6 @@ impl<DM: DisplayManager, MM: MotorsManager> EventLoop<DM, MM> {
                         .unwrap();
                 }
             }
-        }
-    }
-}
-
-#[embassy_executor::task]
-async fn motor_timeout_task(
-    signal: &'static Signal<NoopRawMutex, ()>,
-) {
-    loop {
-        let res = select(
-            async move {
-                embassy_time::Timer::after(Duration::from_secs(5)).await;
-            },
-            signal.wait(),
-        )
-        .await;
-
-        match res {
-            Either::First(_) => debug!("Motor task completed successfully"),
-            Either::Second(_) => debug!("Motor task interrupted by signal"),
         }
     }
 }
