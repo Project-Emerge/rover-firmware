@@ -16,6 +16,7 @@ in
       rustup
       esp-generate
       cargo
+      probe-rs
     ];
     RUSTC_VERSION = overrides.toolchain.channel;
     RUSTUP_TOOLCHAIN = "esp";
