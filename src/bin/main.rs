@@ -173,7 +173,7 @@ async fn main(spawner: Spawner) -> ! {
     wait_for_connection(stack, event_pub_for_wait).await;
 
     let uid_handle = UID.init(String::new());
-    core::write!(uid_handle, "project-emerge-{}", "12345").unwrap();
+    core::write!(uid_handle, "project-emerge-{}", env!("ROBOT_ID")).unwrap();
 
     let IpAddress::Ipv4(address) = match MQTT_BROKER.parse::<IpAddress>() {
         Ok(addr) => addr,
