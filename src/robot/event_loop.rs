@@ -1,8 +1,11 @@
-use crate::{robot::{
-    display_manager::DisplayManager,
-    events::{DisplayEvents, MotorCommand, RobotEvents, RobotRotation},
-    motors_manager::MotorsManager,
-}, utils::channels::{ActionPub, EventSub}};
+use crate::{
+    robot::{
+        display_manager::DisplayManager,
+        events::{DisplayEvents, MotorCommand, RobotEvents, RobotRotation},
+        motors_manager::MotorsManager,
+    },
+    utils::channels::{ActionPub, EventSub},
+};
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
@@ -84,12 +87,16 @@ impl<DM: DisplayManager, MM: MotorsManager> EventLoop<DM, MM> {
                     self.motors_manager.drive(x, y).unwrap();
                     self.last_time = Instant::now();
                 }
-                RobotEvents::Motor(MotorCommand::Rotate { direction: RobotRotation::Clockwise(speed) }) => {
+                RobotEvents::Motor(MotorCommand::Rotate {
+                    direction: RobotRotation::Clockwise(speed),
+                }) => {
                     self.last_signal.signal(());
                     self.motors_manager.rotate_clockwise(speed).unwrap();
                     self.last_time = Instant::now();
                 }
-                RobotEvents::Motor(MotorCommand::Rotate { direction: RobotRotation::CounterClockwise(speed) }) => {
+                RobotEvents::Motor(MotorCommand::Rotate {
+                    direction: RobotRotation::CounterClockwise(speed),
+                }) => {
                     self.last_signal.signal(());
                     self.motors_manager.rotate_counter_clockwise(speed).unwrap();
                     self.last_time = Instant::now();

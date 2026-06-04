@@ -1,14 +1,20 @@
+use defmt::{error, info, warn};
 use embassy_time::{Duration, Timer};
 use esp_hal::{i2c::master::I2c, Async};
-use defmt::{error, info, warn};
 use ina219::{
     address::Address,
     calibration::{IntCalibration, MicroAmpere},
     SyncIna219,
 };
 
-use crate::{robot::events::RobotEvents, utils::{channels::{ActionPub, EventPub}, protocol::Battery}};
 use crate::utils::mqtt_manager::EmergeMqttAction;
+use crate::{
+    robot::events::RobotEvents,
+    utils::{
+        channels::{ActionPub, EventPub},
+        protocol::Battery,
+    },
+};
 
 const CELL_COUNT: usize = 2; // Number of cells in the battery pack
 const CELL_MAX_VOLTAGE: f32 = 4.2; // Nominal voltage per cell
@@ -17,19 +23,20 @@ const CELL_MIN_VOLTAGE: f32 = 2.5; // Minimum voltage per cell
 pub async fn monitor_battery_loop(
     i2c: I2c<'static, Async>,
     command_sender: EventPub,
-    action_pub: ActionPub
+    action_pub: ActionPub,
 ) -> Result<(), ()> {
     // Create INA219 instance
     info!("INA219 initialized successfully");
     let calibration = IntCalibration::new(MicroAmpere(1_000_000), 1_000).unwrap();
-    
-    let mut ina = match SyncIna219::new_calibrated(i2c, Address::from_byte(0x40).unwrap(), calibration) {
-        Ok(sensor) => sensor,
-        Err(_) => {
-            error!("Failed to initialize INA219 sensor");
-            return Err(());
-        }
-    };
+
+    let mut ina =
+        match SyncIna219::new_calibrated(i2c, Address::from_byte(0x40).unwrap(), calibration) {
+            Ok(sensor) => sensor,
+            Err(_) => {
+                error!("Failed to initialize INA219 sensor");
+                return Err(());
+            }
+        };
 
     loop {
         let conversion_time = match ina.configuration() {
@@ -40,9 +47,9 @@ pub async fn monitor_battery_loop(
                 continue;
             }
         };
-        
+
         Timer::after(Duration::from_micros(conversion_time as u64)).await;
-        
+
         // Read the next measurement with error handling
         let measurement = match ina.next_measurement() {
             Ok(Some(m)) => m,
@@ -50,14 +57,14 @@ pub async fn monitor_battery_loop(
                 info!("INA219 conversion not ready, waiting...");
                 Timer::after(Duration::from_millis(100)).await;
                 continue;
-            },
+            }
             Err(_) => {
                 error!("Failed to read INA219 measurement");
                 Timer::after(Duration::from_secs(5)).await;
                 continue;
             }
         };
-        
+
         let absorbed_current = measurement.current.0 / 100_000;
         let battery_voltage = measurement.bus_voltage.voltage_mv() as f32 / 1000.0;
 
@@ -74,31 +81,41 @@ pub async fn monitor_battery_loop(
 
         info!(
             "Current: {} mA, Battery Voltage: {} V",
-            absorbed_current,
-            battery_voltage
+            absorbed_current, battery_voltage
         );
 
         // Send events with timeout to prevent blocking
         let _ = embassy_time::with_timeout(Duration::from_millis(500), async {
-            command_sender.publish(RobotEvents::Display(
-                crate::robot::events::DisplayEvents::ShowCurrent { current: absorbed_current },
-            )).await;
-            command_sender.publish(RobotEvents::Display(
-                crate::robot::events::DisplayEvents::ShowBatteryVoltage { voltage: battery_voltage },
-            )).await;
-            command_sender.publish(RobotEvents::Display(
-                crate::robot::events::DisplayEvents::ShowBatteryPercentage { percentage: battery_percentage },
-            )).await;
-        }).await;
+            command_sender
+                .publish(RobotEvents::Display(
+                    crate::robot::events::DisplayEvents::ShowCurrent {
+                        current: absorbed_current,
+                    },
+                ))
+                .await;
+            command_sender
+                .publish(RobotEvents::Display(
+                    crate::robot::events::DisplayEvents::ShowBatteryVoltage {
+                        voltage: battery_voltage,
+                    },
+                ))
+                .await;
+            command_sender
+                .publish(RobotEvents::Display(
+                    crate::robot::events::DisplayEvents::ShowBatteryPercentage {
+                        percentage: battery_percentage,
+                    },
+                ))
+                .await;
+        })
+        .await;
 
         action_pub
-            .publish(EmergeMqttAction::BatteryStatus(
-                Battery {
-                    absorbed_current,
-                    battery_voltage: battery_voltage,
-                    battery_percentage: battery_percentage, // Placeholder, update as needed
-                },
-            ))
+            .publish(EmergeMqttAction::BatteryStatus(Battery {
+                absorbed_current,
+                battery_voltage: battery_voltage,
+                battery_percentage: battery_percentage, // Placeholder, update as needed
+            }))
             .await;
 
         Timer::after(Duration::from_secs(5)).await;

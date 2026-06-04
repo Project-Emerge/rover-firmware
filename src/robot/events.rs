@@ -19,7 +19,7 @@ pub enum DisplayEvents {
     ShowBatteryVoltage { voltage: f32 },
     ShowIsLeader { is_leader: bool },
     ShowMemoryStats { free_memory: f32, total_memory: f32 },
-    Render
+    Render,
 }
 
 #[derive(Debug, Clone, defmt::Format, serde::Serialize, serde::Deserialize)]

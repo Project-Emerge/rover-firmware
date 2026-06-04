@@ -1,3 +1,7 @@
+use crate::robot::events::{MotorCommand, RobotEvents};
+use crate::utils::protocol::{Battery, Move};
+use crate::utils::topics::{ROBOT_BATTERY_TOPIC, ROBOT_MOVE_TOPIC};
+use crate::{robot, utils};
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::select::{self, Either};
@@ -10,10 +14,6 @@ use mountain_mqtt::data::quality_of_service::QualityOfService;
 use mountain_mqtt::mqtt_manager::{ConnectionId, MqttOperations};
 use mountain_mqtt::packets::publish::ApplicationMessage;
 use mountain_mqtt_embassy::mqtt_manager::{self, FromApplicationMessage, MqttEvent, Settings};
-use crate::utils::protocol::{Battery, Move};
-use crate::{robot, utils};
-use crate::robot::events::{MotorCommand, RobotEvents};
-use crate::utils::topics::{ROBOT_BATTERY_TOPIC, ROBOT_MOVE_TOPIC};
 use static_cell::StaticCell;
 
 use crate::utils::channels::{ActionSub, EventPub};
@@ -49,7 +49,9 @@ impl MqttOperations for MqttAction {
                             false,
                         )
                         .await?;
-                    client.subscribe(ROBOT_MOVE_TOPIC, QualityOfService::Qos1).await?;
+                    client
+                        .subscribe(ROBOT_MOVE_TOPIC, QualityOfService::Qos1)
+                        .await?;
                 }
             }
             // Actions are sent on any connection, and retried
@@ -137,7 +139,8 @@ async fn mqtt_task(
 }
 
 static EVENT_CHANNEL: StaticCell<Channel<NoopRawMutex, MqttAction, 32>> = StaticCell::new();
-static ACTION_CHANNEL: StaticCell<Channel<NoopRawMutex, MqttEvent<RobotEvents>, 32>> = StaticCell::new();
+static ACTION_CHANNEL: StaticCell<Channel<NoopRawMutex, MqttEvent<RobotEvents>, 32>> =
+    StaticCell::new();
 
 pub async fn init(
     spawner: &Spawner,
@@ -177,12 +180,15 @@ impl<const P: usize> FromApplicationMessage<P> for RobotEvents {
             utils::topics::ROBOT_MOVE_TOPIC => {
                 info!("Received message on my/topic: {}", message.payload);
                 let command = parse_move_command(message.payload)?;
-                Ok(RobotEvents::Motor(MotorCommand::Move { left: command.left, right: command.right }))
-            },
+                Ok(RobotEvents::Motor(MotorCommand::Move {
+                    left: command.left,
+                    right: command.right,
+                }))
+            }
             _ => {
                 // error!("Unexpected topic: {}", message.topic_name);
                 Err(EventHandlerError::UnexpectedApplicationMessageTopic)
-            },
+            }
         }?;
 
         Ok(received)
@@ -191,7 +197,7 @@ impl<const P: usize> FromApplicationMessage<P> for RobotEvents {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EmergeMqttAction {
-    BatteryStatus(Battery)
+    BatteryStatus(Battery),
 }
 
 impl MqttOperations for EmergeMqttAction {
@@ -207,8 +213,11 @@ impl MqttOperations for EmergeMqttAction {
     {
         match self {
             EmergeMqttAction::BatteryStatus(battery) => {
-                let payload = serde_json_core::to_string::<_, 128>(battery)
-                    .map_err(|_| ClientError::PacketWrite(mountain_mqtt::error::PacketWriteError::NullCharacterInString))?;
+                let payload = serde_json_core::to_string::<_, 128>(battery).map_err(|_| {
+                    ClientError::PacketWrite(
+                        mountain_mqtt::error::PacketWriteError::NullCharacterInString,
+                    )
+                })?;
                 info!("Publishing battery status: {}", payload);
                 client
                     .publish(

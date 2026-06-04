@@ -143,15 +143,27 @@ where
 
     #[allow(dead_code)]
     fn drive_left_motors(&mut self, command: DriveCommand) -> Result<(), MotorError> {
-        self.rear_motors.motor_a.drive(command).map_err(|_| MotorError::StandbyError)?;
-        self.front_motors.motor_a.drive(command).map_err(|_| MotorError::StandbyError)?;
+        self.rear_motors
+            .motor_a
+            .drive(command)
+            .map_err(|_| MotorError::StandbyError)?;
+        self.front_motors
+            .motor_a
+            .drive(command)
+            .map_err(|_| MotorError::StandbyError)?;
         Ok(())
     }
 
     #[allow(dead_code)]
     fn drive_right_motors(&mut self, command: DriveCommand) -> Result<(), MotorError> {
-        self.rear_motors.motor_b.drive(command).map_err(|_| MotorError::StandbyError)?;
-        self.front_motors.motor_b.drive(command).map_err(|_| MotorError::StandbyError)?;
+        self.rear_motors
+            .motor_b
+            .drive(command)
+            .map_err(|_| MotorError::StandbyError)?;
+        self.front_motors
+            .motor_b
+            .drive(command)
+            .map_err(|_| MotorError::StandbyError)?;
         Ok(())
     }
 }
@@ -171,8 +183,8 @@ impl<
         FRIn2,
         FRPwm,
         FStandby,
-    > MotorsManager for
-    Tb6612fngMotorsManager<
+    > MotorsManager
+    for Tb6612fngMotorsManager<
         RLIn1,
         RLIn2,
         RLPwm,
@@ -209,9 +221,17 @@ where
         let left_speed: u8 = (left.abs() * 100.0) as u8;
         let right_speed: u8 = (right.abs() * 100.0) as u8;
         info!("Driving with left: {}, right: {}", left_speed, right_speed);
-        
-        let left_command = if left >= 0.0 { DriveCommand::Forward(left_speed) } else { DriveCommand::Backward(left_speed) };
-        let right_command = if right >= 0.0 { DriveCommand::Forward(right_speed) } else { DriveCommand::Backward(right_speed) };
+
+        let left_command = if left >= 0.0 {
+            DriveCommand::Forward(left_speed)
+        } else {
+            DriveCommand::Backward(left_speed)
+        };
+        let right_command = if right >= 0.0 {
+            DriveCommand::Forward(right_speed)
+        } else {
+            DriveCommand::Backward(right_speed)
+        };
 
         self.drive_left_motors(left_command)?;
         self.drive_right_motors(right_command)?;
@@ -228,10 +248,22 @@ where
     }
 
     fn stop(&mut self) -> Result<(), MotorError> {
-        self.rear_motors.motor_a.drive(DriveCommand::Stop).map_err(|_| MotorError::StandbyError)?;
-        self.front_motors.motor_a.drive(DriveCommand::Stop).map_err(|_| MotorError::StandbyError)?;
-        self.rear_motors.motor_b.drive(DriveCommand::Stop).map_err(|_| MotorError::StandbyError)?;
-        self.front_motors.motor_b.drive(DriveCommand::Stop).map_err(|_| MotorError::StandbyError)?;
+        self.rear_motors
+            .motor_a
+            .drive(DriveCommand::Stop)
+            .map_err(|_| MotorError::StandbyError)?;
+        self.front_motors
+            .motor_a
+            .drive(DriveCommand::Stop)
+            .map_err(|_| MotorError::StandbyError)?;
+        self.rear_motors
+            .motor_b
+            .drive(DriveCommand::Stop)
+            .map_err(|_| MotorError::StandbyError)?;
+        self.front_motors
+            .motor_b
+            .drive(DriveCommand::Stop)
+            .map_err(|_| MotorError::StandbyError)?;
         Ok(())
     }
 

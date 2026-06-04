@@ -116,7 +116,7 @@ async fn main(spawner: Spawner) -> ! {
         init(timer1.timer0, rng.clone()).expect("Failed to initialize WIFI/BLE controller")
     );
 
-        // Initialize the display
+    // Initialize the display
     let sclk = peripherals.GPIO9;
     let mosi = peripherals.GPIO10;
     let cs = Output::new(peripherals.GPIO11, Level::Low, OutputConfig::default());
@@ -234,8 +234,9 @@ async fn main(spawner: Spawner) -> ! {
         PwmPinConfig::UP_ACTIVE_HIGH,
     );
 
-    let timer_clock_cfg =
-        clock_cfg.timer_clock_with_frequency(99, PwmWorkingMode::Increase, Rate::from_khz(20)).unwrap();
+    let timer_clock_cfg = clock_cfg
+        .timer_clock_with_frequency(99, PwmWorkingMode::Increase, Rate::from_khz(20))
+        .unwrap();
     mcpwm.timer0.start(timer_clock_cfg);
 
     let motor_driver = Tb6612fngMotorsManager::new(
