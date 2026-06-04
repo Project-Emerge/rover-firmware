@@ -824,9 +824,9 @@ dependencies = [
 
 [[package]]
 name = "esp-wifi"
-version = "0.15.0"
+version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84908f2e95cb99a200cf448abafc416576338be590778a15d9224eee237f3210"
+checksum = "69336f3f30938a644077d2a9747e3cd325436dcaf57d9dc8d58f139e02104889"
 dependencies = [
  "allocator-api2",
  "bt-hci",
