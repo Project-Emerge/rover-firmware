@@ -3,6 +3,13 @@ edition = "2021"
 name    = "project-emerge-firmware"
 version = "0.1.0"
 
+[lints.clippy]
+needless_return       = "allow"
+redundant_field_names = "allow"
+result_large_err      = "allow"
+too_many_arguments    = "allow"
+useless_conversion    = "allow"
+
 [[bin]]
 name = "project-emerge-firmware"
 path = "./src/bin/main.rs"

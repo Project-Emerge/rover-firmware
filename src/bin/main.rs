@@ -113,7 +113,7 @@ async fn main(spawner: Spawner) -> ! {
     let timer1 = TimerGroup::new(peripherals.TIMG0);
     let wifi_init = &*mk_static!(
         EspWifiController<'static>,
-        init(timer1.timer0, rng.clone()).expect("Failed to initialize WIFI/BLE controller")
+        init(timer1.timer0, rng).expect("Failed to initialize WIFI/BLE controller")
     );
 
     // Initialize the display
@@ -142,7 +142,7 @@ async fn main(spawner: Spawner) -> ! {
     display.clear_display(Rgb565::WHITE).unwrap();
     display.show_splash_screen(BMP_DATA).unwrap();
 
-    let (wifi_controller, interfaces) = esp_wifi::wifi::new(&wifi_init, peripherals.WIFI)
+    let (wifi_controller, interfaces) = esp_wifi::wifi::new(wifi_init, peripherals.WIFI)
         .expect("Failed to initialize WIFI controller");
     let wifi_interface = interfaces.sta;
 
@@ -309,18 +309,15 @@ async fn connection(mut controller: WifiController<'static>) {
     info!("start connection task");
     // info!("Device capabilities: {:?}", controller.capabilities().unwrap());
     loop {
-        match esp_wifi::wifi::wifi_state() {
-            WifiState::StaConnected => {
-                // wait until we're no longer connected
-                controller.wait_for_event(WifiEvent::StaDisconnected).await;
-                Timer::after(Duration::from_millis(5000)).await
-            }
-            _ => {}
+        if esp_wifi::wifi::wifi_state() == WifiState::StaConnected {
+            // wait until we're no longer connected
+            controller.wait_for_event(WifiEvent::StaDisconnected).await;
+            Timer::after(Duration::from_millis(5000)).await;
         }
         if !matches!(controller.is_started(), Ok(true)) {
             let client_config = Configuration::Client(ClientConfiguration {
-                ssid: SSID.try_into().unwrap(),
-                password: PASSWORD.try_into().unwrap(),
+                ssid: SSID.into(),
+                password: PASSWORD.into(),
                 ..Default::default()
             });
             controller.set_configuration(&client_config).unwrap();

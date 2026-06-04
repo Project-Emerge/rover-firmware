@@ -48,6 +48,8 @@ fn linker_be_nice() {
 
     println!(
         "cargo:rustc-link-arg=-Wl,--error-handling-script={}",
-        std::env::current_exe().unwrap().display()
+        std::env::current_exe()
+            .expect("build script executable path should be available")
+            .display()
     );
 }
