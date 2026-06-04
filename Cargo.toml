@@ -49,7 +49,7 @@ embedded-io = { version = "0.6.1", features = ["defmt-03"] }
 embedded-io-async = { version = "0.6.1", features = ["defmt-03"] }
 esp-alloc = { version = "0.8.0", features = ["defmt"] }
 heapless = "0.8.0"
-mipidsi = "0.9.0"
+mipidsi = "0.10.0"
 rtt-target = { version = "0.6.1", features = ["defmt"] }
 # for more networking protocol support see https://crates.io/crates/edge-net
 critical-section = "1.2.0"
