@@ -1,6 +1,6 @@
 # Project Emerge Firmware
 
-ESP32-S3 firmware for a robotic platform with MQTT communication, motor control, battery monitoring, and display management.
+ESP32-C3 firmware for a robotic platform with MQTT communication, motor control, battery monitoring, and display management.
 
 ## Features
 
@@ -15,7 +15,7 @@ ESP32-S3 firmware for a robotic platform with MQTT communication, motor control,
 
 ### Hardware Requirements
 
-- **ESP32-S3 development board** (with at least 8MB Flash, 2MB PSRAM recommended)
+- **ESP32-C3 development board**
 - **ST7789 display** (135x240 pixels)
 - **TB6612FNG motor drivers** (2x for 4-wheel drive)
 - **INA219 current/voltage sensor** for battery monitoring
@@ -25,14 +25,14 @@ ESP32-S3 firmware for a robotic platform with MQTT communication, motor control,
 
 - **[Rust](https://rustlang.org/tools/install)** (latest stable version)
 - **[probe-rs](https://probe.rs/docs/getting-started/installation/)** for flashing and debugging
-- **ESP Rust toolchain** for Xtensa architecture support
+- **ESP Rust toolchain** with RISC-V target support
 
 ### Hardware Pin Configuration
 
-| Component | ESP32-S3 GPIO | Notes |
+| Component | ESP32-C3 GPIO | Notes |
 |-----------|---------------|--------|
-| **I2C SDA** | GPIO39 | For INA219 sensor |
-| **I2C SCL** | GPIO38 | For INA219 sensor |
+| **I2C SDA** | Board-specific | For INA219 sensor |
+| **I2C SCL** | Board-specific | For INA219 sensor |
 | **ST7789 Display** | SPI pins | CS, DC, RST pins (check your board) |
 | **Motor Drivers** | PWM pins | TB6612FNG control pins |
 
@@ -67,8 +67,8 @@ The `.cargo/config.toml` file in the project root contains the configuration for
 Update it with your specific settings:
 
 ```toml
-[target.xtensa-esp32s3-none-elf]
-runner = "probe-rs run --chip=esp32s3 --preverify --always-print-stacktrace --no-location --catch-hardfault"
+[target.riscv32imc-unknown-none-elf]
+runner = "probe-rs run --chip=esp32c3 --preverify --always-print-stacktrace --no-location --catch-hardfault"
 
 [env]
 DEFMT_LOG = "info"                 # Log level: trace, debug, info, warn, error
@@ -79,8 +79,7 @@ MQTT_PORT = "1883"                # MQTT broker port
 ROBOT_ID = "0"                    # Unique robot identifier (0-255)
 
 [build]
-rustflags = ["-C", "link-arg=-nostartfiles"]
-target = "xtensa-esp32s3-none-elf"
+target = "riscv32imc-unknown-none-elf"
 
 [unstable]
 build-std = ["alloc", "core"]
@@ -154,20 +153,20 @@ If you need more control over the flashing process:
 
 ```bash
 # Flash with specific chip target
-probe-rs run --chip=esp32s3 target/xtensa-esp32s3-none-elf/release/project-emerge-firmware
+probe-rs run --chip=esp32c3 target/riscv32imc-unknown-none-elf/release/project-emerge-firmware
 
 # Flash with different speed (if having connection issues)
-probe-rs run --chip=esp32s3 --speed 115200 target/xtensa-esp32s3-none-elf/debug/project-emerge-firmware
+probe-rs run --chip=esp32c3 --speed 115200 target/riscv32imc-unknown-none-elf/debug/project-emerge-firmware
 ```
 
 ### Monitoring
 
 ```bash
-# Monitor serial output with RTT (Real-Time Transfer)
-probe-rs run --chip=esp32s3 --catch-hardfault
+# Monitor RTT/defmt output
+probe-rs run --chip=esp32c3 --catch-hardfault --rtt-scan-memory target/riscv32imc-unknown-none-elf/debug/project-emerge-firmware
 
 # Alternative monitoring
-probe-rs attach --chip=esp32s3
+probe-rs attach --chip=esp32c3 --rtt-scan-memory target/riscv32imc-unknown-none-elf/debug/project-emerge-firmware
 ```
 
 ## Testing
@@ -183,10 +182,10 @@ cargo test
 
 ```bash
 # Flash and run embedded tests on actual hardware
-cargo test --target xtensa-esp32s3-none-elf
+cargo test --target riscv32imc-unknown-none-elf
 
 # Run specific test
-cargo test --target xtensa-esp32s3-none-elf -- --exact test_name
+cargo test --target riscv32imc-unknown-none-elf -- --exact test_name
 ```
 
 ## MQTT Communication
@@ -296,24 +295,24 @@ espup install --force
 # List connected devices
 probe-rs list
 
-# Check if ESP32-S3 is detected
+# Check if ESP32-C3 is detected
 lsusb | grep -i esp
 
 # Try flashing with different speed
-probe-rs run --chip=esp32s3 --speed 115200 target/xtensa-esp32s3-none-elf/debug/project-emerge-firmware
+probe-rs run --chip=esp32c3 --speed 115200 target/riscv32imc-unknown-none-elf/debug/project-emerge-firmware
 
 # Reset the device manually before flashing
-probe-rs erase --chip=esp32s3
+probe-rs erase --chip=esp32c3
 ```
 
 ### Runtime Issues
 
 ```bash
-# Check serial output with crash detection
-probe-rs run --chip=esp32s3 --catch-hardfault
+# Check RTT/defmt output with crash detection
+probe-rs run --chip=esp32c3 --catch-hardfault --rtt-scan-memory target/riscv32imc-unknown-none-elf/debug/project-emerge-firmware
 
 # Monitor logs via RTT (Real-Time Transfer) 
-probe-rs attach --chip=esp32s3
+probe-rs attach --chip=esp32c3 --rtt-scan-memory target/riscv32imc-unknown-none-elf/debug/project-emerge-firmware
 
 # Check WiFi connection status
 # (Look for "WiFi connected" in the logs)

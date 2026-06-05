@@ -46,10 +46,12 @@ fn linker_be_nice() {
         std::process::exit(0);
     }
 
-    println!(
-        "cargo:rustc-link-arg=-Wl,--error-handling-script={}",
-        std::env::current_exe()
-            .expect("build script executable path should be available")
-            .display()
-    );
+    let script = std::env::current_exe().expect("build script executable path should be available");
+    let linker_arg = if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("riscv32") {
+        format!("--error-handling-script={}", script.display())
+    } else {
+        format!("-Wl,--error-handling-script={}", script.display())
+    };
+
+    println!("cargo:rustc-link-arg={linker_arg}");
 }

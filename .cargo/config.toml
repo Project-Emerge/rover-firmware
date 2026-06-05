@@ -1,5 +1,5 @@
-[target.xtensa-esp32s3-none-elf]
-runner = "probe-rs run --chip=esp32s3 --preverify --always-print-stacktrace --no-location --catch-hardfault"
+[target.riscv32imc-unknown-none-elf]
+runner = "probe-rs run --chip=esp32c3 --preverify --always-print-stacktrace --no-location --catch-hardfault --rtt-scan-memory"
 
 [env]
 DEFMT_LOG="info"
@@ -10,9 +10,7 @@ MQTT_PORT = "1883"
 ROBOT_ID = "0"
 
 [build]
-rustflags = ["-C", "link-arg=-nostartfiles"]
-
-target = "xtensa-esp32s3-none-elf"
+target = "riscv32imc-unknown-none-elf"
 
 [unstable]
 build-std = ["alloc", "core"]
