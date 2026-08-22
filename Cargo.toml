@@ -68,7 +68,7 @@ esp-wifi = { version = "0.15.0", features = [
   "wifi",
 ] }
 ina219 = "0.2.0"
-smoltcp = { version = "0.12.0", default-features = false, features = [
+smoltcp = { version = "0.14.0", default-features = false, features = [
   "defmt",
   "medium-ethernet",
   "multicast",
