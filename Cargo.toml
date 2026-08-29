@@ -17,7 +17,7 @@ path = "./src/bin/main.rs"
 [dependencies]
 defmt = "1.0.1"
 esp-bootloader-esp-idf = "0.1.0"
-esp-backtrace = { version = "0.17.0", features = [
+esp-backtrace = { version = "0.20.0", features = [
     "esp32s3",
     "exception-handler",
     "panic-handler",
